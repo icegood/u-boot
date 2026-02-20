@@ -1120,6 +1120,8 @@ dtb-$(CONFIG_ARCH_MEDIATEK) += \
 	mt7623a-unielec-u7623-02-emmc.dtb \
 	mt7622-bananapi-bpi-r64.dtb \
 	mt7622-linksys-e8450-ubi.dtb \
+	mt7622-ubnt-unifi-6-lr.dtb \
+	mt7622-ubnt-unifi-6-lr-v3.dtb \
 	mt7623n-bananapi-bpi-r2.dtb \
 	mt7981-rfb.dtb \
 	mt7981-snfi-nand-rfb.dtb \
