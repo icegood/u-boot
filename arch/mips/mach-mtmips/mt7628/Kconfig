@@ -27,6 +27,12 @@ config BOARD_MT7628_RFB
 	  SPI-NOR flash, 1 built-in switch with 5 ports, 1 UART, 1 USB host,
 	  1 SDXC, 1 PCIe socket and JTAG pins.
 
+config BOARD_TPLINK_WA801ND_V5
+	bool "TP-Link TL-WA801ND V5"
+	help
+	  TP-Link TL-WA801ND v5 router. MT7628AN SoC, single internal PHY
+	  (port 0 only), UART console on UART0.
+
 config BOARD_RAVPOWER_RP_WD009
 	bool "RAVPower RP-WD009"
 	depends on SOC_MT7628
@@ -61,6 +67,7 @@ config SYS_CONFIG_NAME
 
 source "board/gardena/smart-gateway-mt7688/Kconfig"
 source "board/ravpower/rp-wd009/Kconfig"
+source "board/mediatek/mt7628/TPLINK_WA801ND_V5/Kconfig"
 source "board/seeed/linkit-smart-7688/Kconfig"
 source "board/vocore/vocore2/Kconfig"
 
