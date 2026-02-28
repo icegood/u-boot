@@ -1,0 +1,5 @@
+TPLINK_WA801ND_V5 BOARD
+M:	Sivanov
+S:	Maintained
+F:	configs/tplink_wa801nd_v5_defconfig
+F:	arch/mips/dts/tplink,tl-wa801nd-v5.dts
