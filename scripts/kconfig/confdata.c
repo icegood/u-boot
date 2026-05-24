@@ -818,8 +818,7 @@ int conf_write(const char *name)
 
 	conf_write_heading(out, &kconfig_printer_cb, NULL);
 
-	if (!conf_get_changed())
-		sym_clear_all_valid();
+	sym_clear_all_valid();
 
 	menu = rootmenu.list;
 	while (menu) {
@@ -836,6 +835,24 @@ int conf_write(const char *name)
 			sym_calc_value(sym);
 			if (!(sym->flags & SYMBOL_WRITE))
 				goto next;
+			/* skip unprompted non-bool symbols without a user-set
+			 * value — their value comes from Kconfig defaults and
+			 * would become a stale user-set override if written to
+			 * .config, preventing recalculation when a dependency
+			 * (e.g. board profile choice) changes.  Prompted
+			 * symbols are always written so oldconfig does not
+			 * ask the user to configure them.
+			 */
+			switch (sym_get_type(sym)) {
+			case S_HEX:
+			case S_INT:
+			case S_STRING:
+				if (!menu_has_prompt(menu) && !sym_has_value(sym))
+					goto next;
+				break;
+			default:
+				break;
+			}
 			sym->flags &= ~SYMBOL_WRITE;
 
 			conf_write_symbol(out, sym, &kconfig_printer_cb, NULL);
