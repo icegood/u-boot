@@ -1,21 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0+
-#
-# Copyright (c) 2017 Imagination Technologies Ltd.
+# Post-link processing for MIPS: populate .data.reloc section
+# Called as: $(MAKE) -f arch/mips/Makefile.postlink <target>
 
-PHONY := __archpost
-__archpost:
-
+include scripts/Kbuild.include
 -include include/config/auto.conf
-include scripts/Kbuild.uboot
 
-CMD_RELOCS = tools/mips-relocs
-quiet_cmd_relocs = RELOCS  $@
-      cmd_relocs = $(CMD_RELOCS) $@
-
-u-boot: FORCE
-	@true
-	$(call if_changed,relocs)
-
-.PHONY: FORCE
-
-FORCE:
+# Always run mips-relocs on the target ELF (e.g. u-boot, spl/u-boot-spl)
+.PHONY: $(MAKECMDGOALS)
+$(MAKECMDGOALS):
+	$(MAKE) $(build)=tools tools/mips-relocs
+	@printf "  RELOCS  %s\n" $@
+	@tools/mips-relocs $@

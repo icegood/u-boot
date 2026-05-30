@@ -21,15 +21,16 @@
  * apply the relocation, relative to the previous relocation or for the first
  * relocation the start of the relocated .text section.
  *
- * The end of the relocation data is indicated when type R_MIPS_NONE (0) is
+ * The end of the relocation data is indicated when type R_MIPS_SENTINEL is
  * read, at which point no further integers should be read. That is, the
- * terminating R_MIPS_NONE reloc includes no offset.
+ * terminating R_MIPS_SENTINEL reloc includes no offset.
  */
 
 #include <cpu_func.h>
 #include <init.h>
 #include <asm/relocs.h>
 #include <asm/sections.h>
+#include <stdio.h>
 #include <linux/bitops.h>
 
 /**
@@ -79,6 +80,7 @@ static void apply_reloc(unsigned int type, void *addr, long off, uint8_t *buf)
 		break;
 
 	case R_MIPS_32:
+	case R_MIPS_REL32:
 		*(uint32_t *)addr += off;
 		break;
 
@@ -90,7 +92,63 @@ static void apply_reloc(unsigned int type, void *addr, long off, uint8_t *buf)
 		*(uint32_t *)addr += off >> 16;
 		break;
 
+	case R_MIPS16_HI16:
+		*(uint32_t *)addr += off >> 16;
+		break;
+
+	case R_MIPS_16:
+	case R_MIPS_JALR:
+		/* Linker marker, no fixup needed */
+		break;
+
+	case 17:
+		/* R_MIPS_GOT_PAGE: LUI with GOT page base */
+		*(uint32_t *)addr += off >> 16;
+		break;
+
 	default:
+#ifndef CONFIG_SPL_BUILD
+		printf("<<RELOC_UNHANDLED type=");
+		{
+			char tmp[16];
+			int i = 0;
+			unsigned int t = type;
+			if (t >= 100) tmp[i++] = '0' + t / 100;
+			if (t >= 10) tmp[i++] = '0' + (t / 10) % 10;
+			tmp[i++] = '0' + t % 10;
+			tmp[i] = '\0';
+			printf(tmp);
+		}
+		printf(" addr=");
+		{
+			char tmp[16];
+			int i = 0;
+			unsigned long a = (unsigned long)addr;
+			int j;
+			for (j = 28; j >= 0; j -= 4) {
+				unsigned int nib = (a >> j) & 0xf;
+				tmp[i++] = nib < 10 ? '0' + nib : 'a' + nib - 10;
+			}
+			tmp[i] = '\0';
+			printf(tmp);
+		}
+		printf(" buf_bytes=");
+		{
+			char tmp[32];
+			int i = 0;
+			int j;
+			for (j = -4; j < 4; j++) {
+				uint8_t b = *(buf + j);
+				unsigned int hi = (b >> 4) & 0xf;
+				unsigned int lo = b & 0xf;
+				tmp[i++] = hi < 10 ? '0' + hi : 'a' + hi - 10;
+				tmp[i++] = lo < 10 ? '0' + lo : 'a' + lo - 10;
+			}
+			tmp[i] = '\0';
+			printf(tmp);
+		}
+		printf(">>\n");
+#endif
 		panic("Unhandled reloc type %u (@ %p), bss used before relocation?\n",
 		      type, buf);
 	}
@@ -113,6 +171,18 @@ void relocate_code(ulong start_addr_sp, gd_t *new_gd, ulong relocaddr)
 	uint8_t *buf, *bss_start;
 	unsigned int type;
 	long off;
+	{
+		char tmp[32];
+		int i = 0;
+		unsigned long v = (unsigned long)relocaddr;
+		int j;
+		for (j = 28; j >= 0; j -= 4) {
+			unsigned int nib = (v >> j) & 0xf;
+			tmp[i++] = nib < 10 ? '0' + nib : 'a' + nib - 10;
+		}
+		tmp[i] = '\0';
+		printf("relocaddr=%s\n", tmp);
+	}
 
 	/*
 	 * Ensure that we're relocating by an offset which is a multiple of
@@ -129,11 +199,12 @@ void relocate_code(ulong start_addr_sp, gd_t *new_gd, ulong relocaddr)
 	memcpy((void *)relocaddr, __text_start, length);
 
 	/* Now apply relocations to the copy in RAM */
+	printf("relocate_code relocs start\n");
 	buf = __rel_start;
 	addr = relocaddr;
 	while (true) {
 		type = read_uint(&buf);
-		if (type == R_MIPS_NONE)
+		if (type == R_MIPS_SENTINEL)
 			break;
 
 		addr += read_uint(&buf) << 2;

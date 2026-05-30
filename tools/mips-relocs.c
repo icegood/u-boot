@@ -113,8 +113,10 @@ static int add_reloc(unsigned int type, uint64_t off)
 	size_t new_sz;
 
 	switch (type) {
-	case R_MIPS_NONE:
+	case R_MIPS_16:
 	case R_MIPS_LO16:
+	case R_MIPS16_LO16:
+	case R_MIPS_JALR:
 	case R_MIPS_PC16:
 	case R_MIPS_HIGHER:
 	case R_MIPS_HIGHEST:
@@ -388,8 +390,8 @@ int main(int argc, char *argv[])
 		output_uint(&buf, relocs[i].offset >> 2);
 	}
 
-	/* Write a terminating R_MIPS_NONE (0) */
-	output_uint(&buf, R_MIPS_NONE);
+	/* Write a terminating sentinel */
+	output_uint(&buf, R_MIPS_SENTINEL);
 
 	/* Ensure the relocs didn't overflow the .rel section */
 	rel_size = shdr_field(i_rel_shdr, sh_size);
