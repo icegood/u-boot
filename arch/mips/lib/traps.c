@@ -25,7 +25,7 @@ DECLARE_GLOBAL_DATA_PTR;
 
 static unsigned long saved_ebase;
 
-static void show_regs(const struct pt_regs *regs)
+void show_regs(const struct pt_regs *regs)
 {
 	const int field = 2 * sizeof(unsigned long);
 	unsigned int cause = regs->cp0_cause;
@@ -72,7 +72,7 @@ static void show_regs(const struct pt_regs *regs)
 	printf("PrId  : %08x\n", read_c0_prid());
 }
 
-void do_reserved(const struct pt_regs *regs)
+__weak void do_reserved(const struct pt_regs *regs)
 {
 	puts("\nOoops:\n");
 	show_regs(regs);

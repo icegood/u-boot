@@ -102,4 +102,6 @@ static inline void user_stack_pointer_set(struct pt_regs *regs,
 	regs->regs[29] = val;
 }
 
+extern void show_regs(const struct pt_regs *regs);
+
 #endif /* _ASM_PTRACE_H */
