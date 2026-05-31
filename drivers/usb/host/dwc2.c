@@ -1091,13 +1091,19 @@ static int dwc2_init_common(struct udevice *dev, struct dwc2_priv *priv)
 	if (ret)
 		return ret;
 
+	/* Awaken DWC2 core: clear PHY suspend/gate bits in PCGCTL.
+	 * On RT305x the controller may not respond to any register
+	 * access if PCGCTL[3:0] has suspend bits set. */
+	if (readl(&regs->pcgcctl) & 0x0f)
+		writel(0x00, &regs->pcgcctl);
+
 	snpsid = readl(&regs->global_regs.gsnpsid);
-	dev_info(dev, "Core Release: %x.%03x\n",
-		 snpsid >> 12 & 0xf, snpsid & 0xfff);
+	printf("Core Release: %x.%03x\n",
+	       snpsid >> 12 & 0xf, snpsid & 0xfff);
 
 	if (FIELD_GET(GSNPSID_ID_MASK, snpsid) != GSNPSID_OTG_ID) {
-		dev_info(dev, "SNPSID invalid (not DWC2 OTG device): %08x\n",
-			 snpsid);
+		printf("SNPSID invalid (not DWC2 OTG device): %08x\n",
+		       snpsid);
 		return -ENODEV;
 	}
 
@@ -1145,6 +1151,11 @@ static void dwc2_uninit_common(struct dwc2_core_regs *regs)
 {
 	/* Put everything in reset. */
 	clrsetbits_le32(&regs->host_regs.hprt0, HPRT0_W1C_MASK, HPRT0_RST);
+
+	/* Core soft reset -- clears channel state, FIFOs, interrupts
+	 * so a subsequent usb start sees a clean controller.
+	 */
+	dwc2_core_reset(regs);
 }
 
 #if !CONFIG_IS_ENABLED(DM_USB)
@@ -1232,7 +1243,7 @@ static int dwc2_usb_of_to_plat(struct udevice *dev)
 {
 	struct dwc2_priv *priv = dev_get_priv(dev);
 
-	priv->regs = dev_read_addr_ptr(dev);
+	priv->regs = dev_remap_addr(dev);
 	if (!priv->regs)
 		return -EINVAL;
 
@@ -1324,14 +1335,21 @@ static int dwc2_usb_probe(struct udevice *dev)
 	bus_priv->desc_before_addr = true;
 
 	ret = dwc2_clk_init(dev);
-	if (ret)
+	if (ret) {
+		puts("dwc2: clk_init failed\n");
 		return ret;
+	}
 
 	ret = dwc2_setup_phy(dev);
-	if (ret)
+	if (ret) {
+		puts("dwc2: setup_phy failed\n");
 		return ret;
+	}
 
-	return dwc2_init_common(dev, priv);
+	ret = dwc2_init_common(dev, priv);
+	if (ret)
+		puts("dwc2: init_common failed\n");
+	return ret;
 }
 
 static int dwc2_usb_remove(struct udevice *dev)
