@@ -955,16 +955,22 @@ static int print_env_info(void)
 	value = gd->flags & GD_FLG_ENV_DEFAULT ? "true" : "false";
 	printf("env_use_default = %s\n", value);
 
+#ifdef CONFIG_ENV_ADDR
+	printf("env_addr = 0x%lx\n", (ulong)CONFIG_ENV_ADDR);
+#endif
+
 	return CMD_RET_SUCCESS;
 }
 
 #define ENV_INFO_IS_DEFAULT	BIT(0) /* default environment bit mask */
 #define ENV_INFO_IS_PERSISTED	BIT(1) /* environment persistence bit mask */
+#define ENV_INFO_IS_ADDR	BIT(2) /* env address known bit mask */
 
 /*
  * env info - display environment information
  * env info [-d] - evaluate whether default environment is used
  * env info [-p] - evaluate whether environment can be persisted
+ * env info [-a] - evaluate whether env storage address is known
  *      Add [-q] - quiet mode, use only for command result, for test by example:
  *                 test env info -p -d -q
  */
@@ -993,6 +999,9 @@ static int do_env_info(struct cmd_tbl *cmdtp, int flag,
 				break;
 			case 'p':
 				eval_flags |= ENV_INFO_IS_PERSISTED;
+				break;
+			case 'a':
+				eval_flags |= ENV_INFO_IS_ADDR;
 				break;
 			case 'q':
 				quiet = true;
@@ -1030,6 +1039,18 @@ static int do_env_info(struct cmd_tbl *cmdtp, int flag,
 #else
 		if (!quiet)
 			printf("Environment cannot be persisted\n");
+#endif
+	}
+
+	/* evaluate whether env storage address is known */
+	if (eval_flags & ENV_INFO_IS_ADDR) {
+#ifdef CONFIG_ENV_ADDR
+		if (!quiet)
+			printf("env_addr = 0x%lx\n", (ulong)CONFIG_ENV_ADDR);
+		eval_results |= ENV_INFO_IS_ADDR;
+#else
+		if (!quiet)
+			printf("env_addr not available\n");
 #endif
 	}
 
@@ -1170,9 +1191,10 @@ U_BOOT_LONGHELP(env,
 #endif
 #if defined(CONFIG_CMD_NVEDIT_INFO)
 	"env info - display environment information\n"
-	"env info [-d] [-p] [-q] - evaluate environment information\n"
+	"env info [-d] [-p] [-a] [-q] - evaluate environment information\n"
 	"      \"-d\": default environment is used\n"
 	"      \"-p\": environment can be persisted\n"
+	"      \"-a\": environment storage address is known\n"
 	"      \"-q\": quiet output\n"
 #endif
 	"env print [-a | name ...] - print environment\n"
