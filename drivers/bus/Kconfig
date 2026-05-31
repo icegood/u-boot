@@ -5,6 +5,25 @@
 
 menu "Bus devices"
 
+config PALMBUS
+	bool "Ralink/Mediatek palmbus driver"
+	depends on DM
+	default y if ARCH_RALINK
+	help
+	  Support for the Ralink/Mediatek palmbus, an internal peripheral bus
+	  found on RT305x/RT335x/MT7620/MT7628 SoCs. This bus provides
+	  memory-mapped access to SoC subsystems.
+
+config SPL_PALMBUS
+	bool "Ralink/Mediatek palmbus driver (SPL)"
+	depends on SPL_DM
+	help
+	  Support for the Ralink/Mediatek palmbus in SPL.
+
+config TPL_PALMBUS
+	bool "Ralink/Mediatek palmbus driver (TPL)"
+	depends on TPL_DM
+
 config TI_PWMSS
 	bool
 	default y if ARCH_OMAP2PLUS && PWM_TI_EHRPWM

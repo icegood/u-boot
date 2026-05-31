@@ -5,6 +5,7 @@
 
 obj-y	+= cache.o
 obj-y	+= cache_init.o
+obj-y	+= addrspace.o
 obj-y	+= genex.o
 obj-y	+= reloc.o
 obj-y	+= stack.o

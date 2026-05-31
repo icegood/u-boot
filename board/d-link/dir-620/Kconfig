@@ -1,0 +1,202 @@
+if BOARD_DIR620
+
+config SYS_BOARD
+	default "dir-620"
+
+config SUPPORT_SPL
+	def_bool y
+
+config SYS_VENDOR
+	default "d-link"
+
+config SYS_CONFIG_NAME
+	default "dir-620"
+
+config ENV_IS_IN_FLASH
+	def_bool y
+
+config USE_IPADDR
+	def_bool y
+
+config IPADDR
+	default "10.10.10.123"
+
+config USE_SERVERIP
+	def_bool y
+
+config SERVERIP
+	default "10.10.10.3"
+
+#
+# Boot profile selection
+#
+
+choice DIR620_PROFILE
+	prompt "DIR-620 profile"
+	default DIR620_PROFILE_TEST
+
+config DIR620_PROFILE_PROD
+	bool "Production profile"
+	help
+	  Boot flow:
+	    CPU reset vector -> 0xbfc00000 (alias to flash base)
+	    -> SPL runs XIP from flash at 0x9f000000/0xbf000000
+	    -> SPL initialises DRAM, reads DTB+U-Boot LZMA from flash
+	    -> SPL decompresses U-Boot to RAM at 0x80200000, jumps to it
+	    -> U-Boot starts, reads kernel from flash, boots it
+	    The image is written at flash offset 0x0 (standalone).
+
+config DIR620_PROFILE_TEST
+	bool "Test profile"
+	help
+	  Boot flow:
+	    Proprietary bootloader at flash offset 0x0 starts
+	    -> run SPL: go 0xbf050000
+	    -> SPL runs XIP from flash at 0xbf050000 (KSEG1 uncached)
+	    -> SPL initialises DRAM, reads DTB+U-Boot LZMA from flash
+	    -> SPL decompresses U-Boot to RAM at 0x80200000, jumps to it
+	    -> U-Boot starts, reads kernel from flash, boots it
+	    The image is written at flash offset 0x50000 (after proprietary
+	    bootloader).  Proprietary bootloader at offset 0x0 is preserved
+	    — power-cycle to recover from a bad SPL.
+
+config DIR620_PROFILE_RAM
+	bool "RAM debug profile"
+	help
+	  Boot flow:
+	    Load the full flash image into RAM at $loadaddr
+	    -> run SPL from RAM with 'go $loadaddr'
+	    -> SPL initialises DRAM, reads DTB+U-Boot LZMA from RAM
+	    -> SPL decompresses U-Boot to RAM at 0x80200000, jumps to it
+	    -> U-Boot starts, old flash contents are untouched
+
+endchoice
+
+config DIR620_FLASH_DIRECT
+	bool "Direct memory-mapped CFI command transport"
+	default y
+	help
+	  Use the standard U-Boot CFI command transport, writing flash
+	  command cycles directly to the KSEG1 NOR flash window. This is
+	  the default.
+
+
+#
+# Common layout
+#
+
+config DIR620_DTB_OFFSET
+	hex "DIR620_DTB_OFFSET"
+	default 0x8000
+	help
+	  Offset of the device tree blob within the flash image.
+
+config DIR620_DTB_MAX_SIZE
+	hex "DIR620_DTB_MAX_SIZE"
+	default 0x1980
+	help
+	  Maximum size allocated for the device tree blob in flash.
+
+config DIR620_UBOOT_PART_END
+	hex
+	default 0x30000
+	help
+	  End boundary of the U-Boot partition in flash.
+
+config DIR620_FIRMWARE_OFFSET
+	hex
+	default 0x30000 if DIR620_PROFILE_PROD
+	default 0x80000 if DIR620_PROFILE_TEST || DIR620_PROFILE_RAM
+	help
+	  Flash offset of the OpenWrt firmware partition.
+
+config DIR620_FIRMWARE_SIZE
+	hex
+	default 0x7d0000 if DIR620_PROFILE_PROD
+	default 0x780000 if DIR620_PROFILE_TEST || DIR620_PROFILE_RAM
+	help
+	  Size of the OpenWrt firmware partition.
+
+config DIR620_FW_BASE
+	hex
+	default 0xbf030000 if DIR620_PROFILE_PROD
+	default 0xbf080000 if DIR620_PROFILE_TEST || DIR620_PROFILE_RAM
+	help
+	  KSEG1 flash address passed to bootm for the OpenWrt uImage.
+
+config DIR620_FLASH_DTB_ADDR
+	hex
+	default 0xbf008000 if DIR620_PROFILE_PROD
+	default 0xbf058000 if DIR620_PROFILE_TEST || DIR620_PROFILE_RAM
+	help
+	  KSEG1 flash address of the U-Boot DTB embedded in the flash image.
+
+config SPL_MAX_SIZE
+	default 0x5E00
+
+config SPL_PAD_TO
+	default 0x10000
+
+config SPL_BSS_START_ADDR
+	default 0x80010000
+
+config SPL_BSS_MAX_SIZE
+	default 0x10000
+
+config SPL_PAYLOAD
+	default "u-boot-lzma.img" if SPL_LZMA
+
+config ENV_SIZE
+	default 0x2000
+
+# common for both
+config TEXT_BASE
+	default 0x80200000
+
+config DIR620_EXCEPTION_RECOVERY
+	hex "Exception recovery target address"
+	default 0xbf050000
+	help
+	  MIPS exception vectors (TLB refill, general exception, etc.)
+	  jump to this KSEG1 address instead of halting.
+	  Defaults to 0xbf050000 — the TEST SPL XIP address at flash
+	  offset 0x50000.  On PROD this gives a recovery path: any
+	  exception falls through to the test bootloader.
+	  Set to 0 to keep the standard halt-on-exception behavior.
+
+config CMD_BOOTMENU
+	default y
+
+config BOOTMENU_ANSI
+	default n
+
+
+#
+# Profile-dependent layout
+#
+
+config SPL_TEXT_BASE
+	default 0x9f000000 if DIR620_PROFILE_PROD
+	default 0x9f050000 if DIR620_PROFILE_TEST
+	default 0xa0800000 if DIR620_PROFILE_RAM
+
+# Protect command for U-Boot partition sectors (SPL+DTB+LZMA).
+# PROD must skip 8KB env sector at 0x6000; TEST has env outside the region.
+config LOCK_UBOOT_PART_CMD
+	string
+	default "protect on 0xbf000000 +0x6000 && protect on 0xbf008000 +0x28000" if DIR620_PROFILE_PROD
+	default "protect on 0xbf050000 +0x30000" if DIR620_PROFILE_TEST || DIR620_PROFILE_RAM
+
+config ENV_ADDR
+	default 0xbf006000 if DIR620_PROFILE_PROD
+	default 0xbf030000 if DIR620_PROFILE_TEST || DIR620_PROFILE_RAM
+
+config ENV_SECT_SIZE
+	default 0x2000 if DIR620_PROFILE_PROD
+	default 0x10000 if DIR620_PROFILE_TEST || DIR620_PROFILE_RAM
+
+config BUILD_TARGET
+    default "u-boot-dir620-flash.bin" if DIR620_PROFILE_PROD
+    default "u-boot-dir620-test-flash.bin" if DIR620_PROFILE_TEST || DIR620_PROFILE_RAM
+
+endif

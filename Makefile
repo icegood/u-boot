@@ -483,7 +483,7 @@ DEPMOD		= /sbin/depmod
 KBZIP2		= bzip2
 KGZIP		= gzip
 KLZOP		= lzop
-LZMA		= lzma
+LZMA		= xz --format=lzma
 LZ4		= lz4c
 PERL		= perl
 PYTHON		= python
@@ -1354,7 +1354,7 @@ quiet_cmd_pad_cat = CAT     $@
 cmd_pad_cat = $(cmd_objcopy) && $(append) || { rm -f $@; false; }
 
 quiet_cmd_lzma = LZMA    $@
-cmd_lzma = lzma -c -z -k -9 $< > $@
+cmd_lzma = $(LZMA) -c -z -k -9 $< > $@
 
 cfg: u-boot.cfg
 
@@ -1496,27 +1496,27 @@ u-boot-fit-dtb.bin: u-boot-nodtb.bin $(FINAL_DTB_CONTAINER) FORCE
 	$(call if_changed,cat)
 endif
 
-u-boot.bin: u-boot-fit-dtb.bin FORCE
-	$(call if_changed,copy)
+u-boot.bin: u-boot-fit-dtb.bin
+	$(call cmd,copy)
 
 ifneq ($(CONFIG_MPC85XX_HAVE_RESET_VECTOR)$(CONFIG_OF_SEPARATE),yy)
-u-boot-dtb.bin: u-boot-nodtb.bin dts/dt.dtb FORCE
-	$(call if_changed,cat)
+u-boot-dtb.bin: u-boot-nodtb.bin dts/dt.dtb
+	$(call cmd,cat)
 endif
 
 else ifeq ($(CONFIG_OF_SEPARATE).$(CONFIG_OF_OMIT_DTB),y.)
 
 ifneq ($(CONFIG_MPC85XX_HAVE_RESET_VECTOR)$(CONFIG_OF_SEPARATE),yy)
-u-boot-dtb.bin: u-boot-nodtb.bin dts/dt.dtb FORCE
-	$(call if_changed,cat)
+u-boot-dtb.bin: u-boot-nodtb.bin dts/dt.dtb
+	$(call cmd,cat)
 endif
 
-u-boot.bin: u-boot-dtb.bin FORCE
-	$(call if_changed,copy)
+u-boot.bin: u-boot-dtb.bin
+	$(call cmd,copy)
 
 else
-u-boot.bin: u-boot-nodtb.bin FORCE
-	$(call if_changed,copy)
+u-boot.bin: u-boot-nodtb.bin
+	$(call cmd,copy)
 endif
 
 # we call Makefile in arch/arm/mach-imx which
@@ -1544,8 +1544,8 @@ OBJCOPYFLAGS_u-boot.hex := -O ihex
 
 OBJCOPYFLAGS_u-boot.srec := -O srec
 
-u-boot.hex u-boot.srec: u-boot FORCE
-	$(call if_changed,zobjcopy)
+u-boot.hex u-boot.srec: u-boot
+	$(call cmd,zobjcopy)
 
 OBJCOPYFLAGS_u-boot-elf.srec := $(OBJCOPYFLAGS_u-boot.srec)
 
@@ -1637,8 +1637,8 @@ else
 cmd_objcopy_uboot = $(cmd_objcopy)
 endif
 
-u-boot-nodtb.bin: u-boot FORCE
-	$(call if_changed,objcopy_uboot)
+u-boot-nodtb.bin: u-boot
+	$(call cmd,objcopy_uboot)
 	$(BOARD_SIZE_CHECK)
 
 u-boot.ldr:	u-boot
@@ -1757,19 +1757,19 @@ MKIMAGEFLAGS_u-boot-lzma.img = -A $(ARCH) -T standalone -C lzma -O u-boot \
 	-a $(CONFIG_TEXT_BASE) -e $(CONFIG_SYS_UBOOT_START) \
 	-n "U-Boot $(UBOOTRELEASE) for $(BOARD) board"
 
-u-boot.bin.lzma: u-boot.bin FORCE
-	$(call if_changed,lzma)
+u-boot.bin.lzma: u-boot.bin
+	$(call cmd,lzma)
 
-u-boot-lzma.img: u-boot.bin.lzma FORCE
-	$(call if_changed,mkimage)
+u-boot-lzma.img: u-boot.bin.lzma
+	$(call cmd,mkimage)
 
 fit_image := $(if $(CONFIG_SANDBOX_VPL),u-boot,u-boot-nodtb.bin)
 
 u-boot-dtb.img u-boot.img u-boot.kwb u-boot.pbl u-boot-ivt.img: \
 		$(if $(CONFIG_SPL_LOAD_FIT),$(fit_image) \
 			$(if $(CONFIG_OF_SEPARATE)$(CONFIG_OF_EMBED)$(CONFIG_SANDBOX),dts/dt.dtb) \
-		,$(UBOOT_BIN)) FORCE
-	$(call if_changed,mkimage)
+		,$(UBOOT_BIN))
+	$(call cmd,mkimage)
 	$(BOARD_SIZE_CHECK)
 
 ifeq ($(CONFIG_SPL_LOAD_FIT_FULL),y)
@@ -2044,6 +2044,32 @@ quiet_cmd_endian_swap = SWAP    $@
 u-boot-swap.bin: u-boot.bin FORCE
 	$(call if_changed,endian_swap)
 
+ifeq ($(CONFIG_BOARD_DIR620),y)
+$(CONFIG_BUILD_TARGET:"%"=%): include/config/auto.conf spl/u-boot-spl.bin u-boot.dtb $(SPL_PAYLOAD) u-boot-initial-env \
+		$(abspath $(srctree))/tools/mkenvimage.c \
+		$(abspath $(srctree))/tools/os_support.c \
+		$(srctree)/lib/crc32.c \
+		$(srctree)/board/d-link/dir-620/env-extra.txt \
+		$(srctree)/board/d-link/dir-620/build-image.sh \
+		$(srctree)/board/d-link/dir-620/mac_eeprom.bin
+	cat $(objtree)/u-boot-initial-env $(srctree)/board/d-link/dir-620/env-extra.txt > $(objtree)/$@.combined-env.txt
+	$(srctree)/board/d-link/dir-620/build-image.sh $@ $(objtree)/spl/u-boot-spl.bin $(objtree)/u-boot.dtb $(SPL_PAYLOAD) $(CONFIG_SPL_TEXT_BASE) $(CONFIG_DIR620_DTB_OFFSET) $(CONFIG_DIR620_DTB_MAX_SIZE) $(CONFIG_SPL_MAX_SIZE) $(CONFIG_DIR620_UBOOT_PART_END) "SPL_TEXT_BASE=$(CONFIG_SPL_TEXT_BASE) ENV_ADDR=$(CONFIG_ENV_ADDR) ENV_SIZE=$(CONFIG_ENV_SIZE) ENV_SECT_SIZE=$(CONFIG_ENV_SECT_SIZE) BUILD_TARGET=$(CONFIG_BUILD_TARGET:"%"=%)" $(objtree)/$@.combined-env.txt $(srctree)/board/d-link/dir-620/mac_eeprom.bin
+	@echo ""
+	@echo "=== Verify ==="
+	@md5sum $(CONFIG_BUILD_TARGET:"%"=%)
+	@echo ""
+ifdef CONFIG_DIR620_PROFILE_TEST
+	@echo "Profile: TEST  (SPL=$(CONFIG_SPL_TEXT_BASE))"
+	@echo "Run: go $(CONFIG_SPL_TEXT_BASE)"
+else ifdef CONFIG_DIR620_PROFILE_RAM
+	@echo "Profile: RAM   (SPL=$(CONFIG_SPL_TEXT_BASE))"
+	@echo "Run: tftp $(CONFIG_SPL_TEXT_BASE) $(CONFIG_BUILD_TARGET:"%"=%) && go $(CONFIG_SPL_TEXT_BASE)"
+else
+	@echo "Profile: PROD  (SPL=$(CONFIG_SPL_TEXT_BASE), cold boot)"
+	@echo "Flash: mtd write $(CONFIG_BUILD_TARGET:"%"=%) /dev/mtdX"
+endif
+endif
+
 ARCH_POSTLINK := $(wildcard $(srctree)/arch/$(ARCH)/Makefile.postlink)
 
 # Generate linker list symbols references to force compiler to not optimize
@@ -2105,8 +2131,8 @@ cmd_smap = \
 	$(CC) $(c_flags) -DSYSTEM_MAP="\"$${smap}\"" \
 		-c $(srctree)/common/system_map.c -o common/system_map.o
 
-u-boot:	$(u-boot-init) $(u-boot-main) $(u-boot-keep-syms-lto) u-boot.lds FORCE
-	+$(call if_changed,u-boot__)
+u-boot:	$(u-boot-init) $(u-boot-main) $(u-boot-keep-syms-lto) u-boot.lds
+	+$(call cmd,u-boot__)
 ifeq ($(CONFIG_KALLSYMS),y)
 	$(call cmd,smap)
 	$(call cmd,u-boot__) common/system_map.o
@@ -2118,8 +2144,8 @@ endif
 
 quiet_cmd_sym ?= SYM     $@
       cmd_sym ?= $(OBJDUMP) -t $< > $@
-u-boot.sym: u-boot FORCE
-	$(call if_changed,sym)
+u-boot.sym: u-boot
+	$(call cmd,sym)
 
 # Environment processing
 # ---------------------------------------------------------------------------
@@ -2423,8 +2449,8 @@ quiet_cmd_cpp_lds = LDS     $@
 cmd_cpp_lds = $(CPP) -Wp,-MD,$(depfile) $(cpp_flags) $(LDPPFLAGS) \
 		-D__ASSEMBLY__ -x assembler-with-cpp -std=c99 -P -o $@ $<
 
-u-boot.lds: $(LDSCRIPT) prepare FORCE
-	$(call if_changed_dep,cpp_lds)
+u-boot.lds: $(LDSCRIPT) | prepare
+	$(call cmd,cpp_lds)
 
 spl/u-boot-spl.bin: spl/u-boot-spl
 	@:
@@ -2843,9 +2869,11 @@ cmd_genenv = \
 	sed -e '/^\s*$$/d' | \
 	sort -t '=' -k 1,1 -s -o $@
 
-u-boot-initial-env: scripts_basic $(version_h) $(env_h) include/config.h FORCE
+u-boot-initial-env: $(env_h) include/config.h \
+	$(wildcard $(srctree)/include/configs/$(CONFIG_SYS_CONFIG_NAME:"%"=%).h) | \
+	scripts_basic $(version_h)
 	$(Q)$(MAKE) $(build)=tools $(objtree)/tools/printinitialenv
-	$(call if_changed,genenv)
+	$(call cmd,genenv)
 
 # Consistency checks
 # ---------------------------------------------------------------------------

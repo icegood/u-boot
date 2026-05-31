@@ -46,6 +46,18 @@ config ARCH_ATH79
 	select OF_CONTROL
 	imply CMD_DM
 
+config ARCH_RALINK
+	bool "Support Ralink SoCs"
+	select HAS_FIXED_TIMER_FREQUENCY
+	select DM
+	select OF_CONTROL
+	select SUPPORTS_CPU_MIPS32_R1
+	select SUPPORTS_CPU_MIPS32_R2
+	select SUPPORT_LITTLE_ENDIAN
+	select ROM_EXCEPTION_VECTORS
+	select DISPLAY_CPUINFO
+	imply CMD_DM
+
 config ARCH_MSCC
 	bool "Support MSCC VCore-III"
 	select HAS_FIXED_TIMER_FREQUENCY
@@ -197,6 +209,7 @@ source "board/imgtec/boston/Kconfig"
 source "board/imgtec/malta/Kconfig"
 source "board/imgtec/xilfpga/Kconfig"
 source "arch/mips/mach-ath79/Kconfig"
+source "arch/mips/mach-rt3052/Kconfig"
 source "arch/mips/mach-mscc/Kconfig"
 source "arch/mips/mach-bmips/Kconfig"
 source "arch/mips/mach-jz47xx/Kconfig"

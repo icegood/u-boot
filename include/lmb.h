@@ -175,6 +175,7 @@ void lmb_dump_all(void);
 void lmb_dump_all_force(void);
 
 void lmb_arch_add_memory(void);
+phys_addr_t lmb_addr_map(phys_addr_t addr);
 
 struct lmb *lmb_get(void);
 int lmb_push(struct lmb *store);
@@ -182,6 +183,8 @@ void lmb_pop(struct lmb *store);
 
 static inline int lmb_read_check(phys_addr_t addr, phys_size_t len)
 {
+	addr = lmb_addr_map(addr);
+
 	return lmb_alloc_mem(LMB_MEM_ALLOC_ADDR, 0, &addr, len, LMB_NONE);
 }
 

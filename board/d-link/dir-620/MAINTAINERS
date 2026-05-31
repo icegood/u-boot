@@ -1,0 +1,8 @@
+D-LINK DIR-620 A1 BOARD
+M:	OpenWrt Community
+S:	Maintained
+F:	board/d-link/dir-620/
+F:	include/configs/dir-620.h
+F:	configs/dir-620_defconfig
+F:	arch/mips/dts/dlink_dir-620-a1.dts
+F:	arch/mips/mach-rt3052/

@@ -1152,7 +1152,7 @@ static int usb_device_is_ignored(u16 id_vendor, u16 id_product)
 int usb_select_config(struct usb_device *dev)
 {
 	unsigned char *tmpbuf = NULL;
-	int err;
+	int err, retry;
 
 	err = get_descriptor_len(dev, USB_DT_DEVICE_SIZE, USB_DT_DEVICE_SIZE);
 	if (err)
@@ -1217,7 +1217,14 @@ int usb_select_config(struct usb_device *dev)
 	 * This seems premature. If the driver wants a different configuration
 	 * it will need to select itself.
 	 */
-	err = usb_set_configuration(dev, dev->config.desc.bConfigurationValue);
+	for (retry = 0; retry < 5; retry++) {
+		err = usb_set_configuration(dev,
+					    dev->config.desc.bConfigurationValue);
+		if (!err)
+			break;
+
+		mdelay(200);
+	}
 	if (err < 0) {
 		printf("failed to set default configuration " \
 			"len %d, status %lX\n", dev->act_len, dev->status);

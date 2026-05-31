@@ -30,6 +30,7 @@ properties:
       - description: Boards with Ralink RT3052 SoC
         items:
           - enum:
+              - dlink,dir-620-a1
               - ralink,rt3052-eval-board
           - const: ralink,rt3052-soc
 

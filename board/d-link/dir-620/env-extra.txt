@@ -1,0 +1,18 @@
+fw_file=firmware.bin
+boot_flash=bootm $fw_base - $fw_dtb
+fw_wr=itest $filesize -le $fw_size && protect off $fw_base +$filesize && erase $fw_base +$filesize && cp.b $loadaddr $fw_base $filesize
+fw_wr2=dir620_flash_write $loadaddr $fw_base $filesize $fw_size
+flash_tftp=tftp $loadaddr $fw_file && run fw_wr && run boot_flash
+flash_usb=usb start && ext4load usb 0:1 $loadaddr $fw_file && run fw_wr && run boot_flash
+boot_usb=usb start && ext4load usb 0:1 $loadaddr $fw_file && bootm $loadaddr - $dts_addr
+boot_net=tftp $loadaddr $fw_file && bootm $loadaddr - $dts_addr
+boot_cmd=echo === Command line ===
+bootdelay=0
+bootmenu_delay=2
+bootmenu_default=0
+bootmenu_0=Boot from flash=run boot_flash
+bootmenu_1=Flash from TFTP and boot=run flash_tftp
+bootmenu_2=Boot from USB (ext4)=run boot_usb
+bootmenu_3=Boot from network (no save)=run boot_net
+bootmenu_4=Command line=run boot_cmd
+bootcmd=run lock_uboot_part; if dir620_reset_pressed; then run flash_usb; else bootmenu; fi

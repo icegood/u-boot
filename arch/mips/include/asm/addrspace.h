@@ -138,4 +138,10 @@
 #define KDM_TO_PHYS(x)		(_ACAST64_ (x) & TO_PHYS_MASK)
 #define PHYS_TO_K0(x)		(_ACAST64_ (x) | CAC_BASE)
 
+#ifndef __ASSEMBLY__
+unsigned long mips_phys_addr(unsigned long addr);
+unsigned long mips_kseg0_addr(unsigned long addr);
+unsigned long mips_kseg1_addr(unsigned long addr);
+#endif
+
 #endif /* _ASM_ADDRSPACE_H */

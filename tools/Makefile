@@ -295,6 +295,11 @@ clean-files := generated
 # Host tool to dump the currently configured default environment,
 # build it on demand, i.e. not add it to 'always'.
 hostprogs += printinitialenv
+printinitialenv_deps := \
+	$(objtree)/include/generated/environment.h \
+	$(objtree)/include/config.h \
+	$(wildcard $(srctree)/include/configs/$(CONFIG_SYS_CONFIG_NAME:"%"=%).h)
+$(obj)/printinitialenv.o $(obj)/printinitialenv: $(printinitialenv_deps)
 
 # Generated LCD/video logo
 LOGO_H = $(objtree)/include/bmp_logo.h

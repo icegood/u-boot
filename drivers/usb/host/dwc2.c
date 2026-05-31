@@ -803,6 +803,22 @@ static int transfer_chunk(struct dwc2_hc_regs *hc_regs, void *aligned_buffer,
 			HCCHAR_CHENA);
 
 	ret = wait_for_chhltd(hc_regs, &sub, pid);
+	if (ret < 0 && !xfer_len) {
+		u32 hcint = readl(&hc_regs->hcint);
+		u32 err_mask = HCINTMSK_STALL | HCINTMSK_AHBERR |
+			       HCINTMSK_XACTERR | HCINTMSK_BBLERR |
+			       HCINTMSK_DATATGLERR | HCINTMSK_NAK |
+			       HCINTMSK_FRMOVRUN;
+
+		/*
+		 * Some DWC2 cores/devices halt a zero-length control status
+		 * transaction after ACK without also raising XFERCOMPL.
+		 */
+		if ((hcint & (HCINTMSK_CHHLTD | HCINTMSK_ACK)) ==
+		    (HCINTMSK_CHHLTD | HCINTMSK_ACK) &&
+		    !(hcint & err_mask))
+			ret = 0;
+	}
 	if (ret < 0)
 		return ret;
 
@@ -1368,6 +1384,11 @@ static int dwc2_usb_remove(struct udevice *dev)
 	}
 
 	dwc2_uninit_common(priv->regs);
+
+	if (device_is_compatible(dev, "ralink,rt3050-otg")) {
+		reset_assert_bulk(&priv->resets);
+		mdelay(1000);
+	}
 
 	reset_release_bulk(&priv->resets);
 	clk_disable_bulk(&priv->clks);

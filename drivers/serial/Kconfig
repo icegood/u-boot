@@ -292,6 +292,15 @@ config DEBUG_UART_NS16550
 	  will need to provide parameters to make this work. The driver will
 	  be available until the real driver model serial is running.
 
+config DEBUG_UART_RT305X
+	bool "Ralink RT305x/RT2880 UART Lite"
+	depends on RT305X_UART
+	help
+	  Select this to enable a debug UART using the Ralink UART Lite
+	  driver (serial_rt305x). You will need to provide parameters to
+	  make this work. The driver will be available until the real
+	  driver model serial is running.
+
 config DEBUG_EFI_CONSOLE
 	bool "EFI"
 	depends on EFI_APP
@@ -1107,6 +1116,17 @@ config MTK_SERIAL
 	  tree binding to operate.
 	  The High-speed UART is compatible with the ns16550a UART and have
 	  its own high-speed registers.
+
+config RT305X_UART
+	bool "UART driver for Ralink RT305x/RT2880 SoCs"
+	depends on DM_SERIAL
+	help
+	  Select this to enable UART support for Ralink RT305x and RT2880
+	  SoCs. The UART on these SoCs is a "UART Lite" with a register
+	  layout that is similar to ns16550a but with MCR removed and
+	  all register offsets shifted by 4 bytes.
+	  The driver uses driver model and requires a device tree
+	  binding to operate.
 
 config MT7620_SERIAL
 	bool "UART driver for MediaTek MT7620 and earlier SoCs"

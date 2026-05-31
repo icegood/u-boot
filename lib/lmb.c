@@ -19,6 +19,7 @@
 
 #include <asm/global_data.h>
 #include <asm/sections.h>
+#include <linux/compiler_attributes.h>
 #include <linux/kernel.h>
 #include <linux/sizes.h>
 
@@ -26,6 +27,11 @@ DECLARE_GLOBAL_DATA_PTR;
 
 #define LMB_RGN_OVERLAP		1
 #define LMB_RGN_ADJACENT	2
+
+phys_addr_t __weak lmb_addr_map(phys_addr_t addr)
+{
+	return addr;
+}
 
 /*
  * The following low level LMB functions must not access the global LMB memory

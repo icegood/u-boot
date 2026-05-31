@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0+
 
+dtb-$(CONFIG_BOARD_DIR620) += dlink_dir-620-a1.dtb
 dtb-$(CONFIG_TARGET_AP121) += ap121.dtb
 dtb-$(CONFIG_TARGET_AP143) += ap143.dtb
 dtb-$(CONFIG_TARGET_AP152) += ap152.dtb

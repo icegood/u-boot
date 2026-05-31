@@ -1,0 +1,62 @@
+menu "Ralink RT305x platforms"
+	depends on ARCH_RALINK
+
+config SYS_MALLOC_F_LEN
+	default 0x1000
+
+config SYS_SOC
+	default "rt3052"
+
+config SYS_DCACHE_SIZE
+	default 16384
+
+config SYS_DCACHE_LINE_SIZE
+	default 32
+
+config SYS_ICACHE_SIZE
+	default 32768
+
+config SYS_ICACHE_LINE_SIZE
+	default 32
+
+config TEXT_BASE
+	default 0x9f000000 if !BOARD_DIR620
+
+config BUILD_TARGET
+	default "u-boot.bin" if !BOARD_DIR620
+
+config MAX_MEM_SIZE
+	int
+	default 64
+
+choice
+	prompt "Board select"
+
+config BOARD_DUMMY
+	bool "Dummy board (test only)"
+	help
+	  Placeholder board option used to test Kconfig choice handling.
+
+config BOARD_DIR620
+	bool "D-Link DIR-620 A1"
+	select CFI_FLASH
+	select CFI_FLASH_USE_WEAK_ACCESSORS
+	select DM_RESET
+	select DM_MTD
+	select FLASH_CFI_DRIVER
+	select MTD
+	select MTD_NOR_FLASH
+	select OF_CONTROL
+	select RESET_RALINK_SYSC
+	select DM
+	select DM_SERIAL
+	select RT3050_ETH
+	help
+	  D-Link DIR-620 A1 board based on Ralink RT3052 SoC.
+	  32 MiB SDRAM, 8 MiB parallel NOR flash, USB.
+
+endchoice
+
+source "board/d-link/dir-620/Kconfig"
+
+endmenu

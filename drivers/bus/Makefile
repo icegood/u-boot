@@ -8,4 +8,5 @@ obj-$(CONFIG_TI_PWMSS)	+= ti-pwmss.o
 obj-$(CONFIG_UNIPHIER_SYSTEM_BUS) += uniphier-system-bus.o
 endif
 
+obj-$(CONFIG_$(PHASE_)PALMBUS)	+= palmbus.o
 obj-$(CONFIG_$(PHASE_)TI_SYSC)	+= ti-sysc.o

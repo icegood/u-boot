@@ -260,7 +260,7 @@ config SPL_LDSCRIPT
 	  be used for SPL.
 
 config SPL_TEXT_BASE
-	hex "SPL Text Base"
+	hex "SPL Text Base" if !BOARD_DIR620
 	default 0x40200000 if OMAP34XX
 	default 0x402F4000 if AM43XX
 	default 0x402F0400 if AM33XX

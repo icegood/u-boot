@@ -181,7 +181,6 @@ void relocate_code(ulong start_addr_sp, gd_t *new_gd, ulong relocaddr)
 			tmp[i++] = nib < 10 ? '0' + nib : 'a' + nib - 10;
 		}
 		tmp[i] = '\0';
-		printf("relocaddr=%s\n", tmp);
 	}
 
 	/*
@@ -199,7 +198,6 @@ void relocate_code(ulong start_addr_sp, gd_t *new_gd, ulong relocaddr)
 	memcpy((void *)relocaddr, __text_start, length);
 
 	/* Now apply relocations to the copy in RAM */
-	printf("relocate_code relocs start\n");
 	buf = __rel_start;
 	addr = relocaddr;
 	while (true) {

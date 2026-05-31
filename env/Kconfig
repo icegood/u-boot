@@ -604,7 +604,7 @@ config ENV_EXT4_FILE
 	  environment (explicit path to the file)
 
 config ENV_ADDR
-	hex "Environment address"
+	hex "Environment address" if !BOARD_DIR620
 	depends on ENV_IS_IN_FLASH || ENV_IS_IN_NVRAM || ENV_IS_IN_ONENAND || \
 		     ENV_IS_IN_REMOTE || ENV_IS_IN_SPI_FLASH || ENV_IS_IN_MTD
 	default 0x0 if ENV_IS_IN_SPI_FLASH || ENV_IS_IN_MTD
@@ -688,7 +688,7 @@ config ENV_SIZE
 	  Size of the environment storage area
 
 config ENV_SECT_SIZE
-	hex "Environment Sector-Size"
+	hex "Environment Sector-Size" if !BOARD_DIR620
 	depends on ENV_IS_IN_FLASH || ENV_IS_IN_SPI_FLASH
 	default 0x2000 if ARCH_ROCKCHIP
 	default 0x40000 if ARCH_ZYNQMP || ARCH_VERSAL || ARCH_VERSAL_NET || ARCH_VERSAL2

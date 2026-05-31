@@ -237,7 +237,6 @@ static int show_dram_config(void)
 		print_size(size, ")\n");
 	}
 	board_add_ram_info(0);
-	printf("SDR_DONE\n");
 
 	return 0;
 }
@@ -777,7 +776,6 @@ static int jump_to_copy(void)
 		board_init_f_r_trampoline(gd->start_addr_sp);
 # endif
 #else
-	printf("jump_to_copy: calling relocate_code\n");
 	{
 		char tmp[32];
 		int i = 0;
@@ -788,7 +786,7 @@ static int jump_to_copy(void)
 			tmp[i++] = nib < 10 ? '0' + nib : 'a' + nib - 10;
 		}
 		tmp[i] = '\0';
-		printf("  relocaddr=%s\n", tmp);
+		printf("relocaddr=%s\n", tmp);
 	}
 	relocate_code(gd->start_addr_sp, gd->new_gd, gd->relocaddr);
 #endif

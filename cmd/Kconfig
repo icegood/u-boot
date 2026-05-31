@@ -515,7 +515,7 @@ source "lib/efi_selftest/Kconfig"
 endif
 
 config CMD_BOOTMENU
-	bool "bootmenu"
+	bool "bootmenu" if !BOARD_DIR620
 	select MENU
 	select CHARSET
 	help

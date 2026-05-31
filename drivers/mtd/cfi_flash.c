@@ -175,20 +175,18 @@ __maybe_weak u64 flash_read64(void *addr)
 	return *(volatile u64 *)addr;
 }
 
-/*
- * Optional command transport hook.  Return 0 if the command was handled, or
- * non-zero to use the normal memory-mapped flash write.
- */
-__weak int cfi_flash_write_cmd_transport(flash_info_t *info, flash_sect_t sect,
-					 uint offset, u32 cmd, void *addr,
-					 cfiword_t *cword)
-{
-	return -ENOSYS;
-}
-
 static bool cfi_is_amd_standard(const flash_info_t *info)
 {
 	return info->vendor == CFI_CMDSET_AMD_STANDARD;
+}
+
+__weak ulong board_flash_erase_timeout(flash_info_t *info, ulong erase_tout)
+{
+	return erase_tout;
+}
+
+__weak void board_flash_print_info(flash_info_t *info)
+{
 }
 
 /*-----------------------------------------------------------------------
@@ -380,14 +378,6 @@ static void flash_write_cmd(flash_info_t *info, flash_sect_t sect,
 	addr = flash_map(info, sect, offset);
 	flash_make_cmd(info, cmd, &cword);
 
-	if (cfi_is_amd_standard(info) &&
-	    !cfi_flash_write_cmd_transport(info, sect, offset, cmd, addr,
-					   &cword)) {
-		sync();
-		flash_unmap(info, sect, offset, addr);
-		return;
-	}
-
 	switch (info->portwidth) {
 	case FLASH_CFI_8BIT:
 		flash_write8(cword.w8, addr);
@@ -438,7 +428,7 @@ static void flash_amd_unlock_seq(flash_info_t *info, flash_sect_t sect)
 	flash_unlock_seq(info, board_flash_amd_unlock_sect(info, sect));
 }
 
-__weak void board_flash_erase_wait(void)
+__weak void board_flash_erase_wait(ulong erase_tout)
 {
 }
 
@@ -544,9 +534,16 @@ static int flash_toggle(flash_info_t *info, flash_sect_t sect, uint offset,
 	 */
 	if (cfi_is_amd_standard(info) && info->native_width < info->portwidth) {
 		switch (info->native_width) {
-		case FLASH_CFI_8BIT:
-			retval = flash_read8(addr) != flash_read8(addr);
+		case FLASH_CFI_8BIT: {
+			u8 r1 = flash_read8(addr);
+			u8 r2 = flash_read8(addr);
+
+			retval = r1 != r2;
+			if (retval)
+				printf("cfi_dbg: toggle r1=%02x r2=%02x addr=%p\n",
+				       r1, r2, addr);
 			goto out;
+		}
 		default:
 			break;
 		}
@@ -703,11 +700,49 @@ static int flash_status_check(flash_info_t *info, flash_sect_t sector,
 			udelay(1);
 			return FL_ERR_TIMEOUT;
 		}
-		udelay(1);		/* also triggers watchdog */
+		udelay(10);		/* also triggers watchdog */
 	}
 	flash_unmap(info, sector, 0, addr);
 
 	return FL_ERR_OK;
+}
+
+static int flash_status_check_addr(flash_info_t *info, void *addr, ulong tout,
+				   char *prompt, cfiword_t *expected)
+{
+	ulong start;
+
+#if CONFIG_SYS_HZ != 1000
+	/* Avoid overflow for large HZ */
+	if ((ulong)CONFIG_SYS_HZ > 100000)
+		tout *= (ulong)CONFIG_SYS_HZ / 1000;
+	else
+		tout = DIV_ROUND_UP(tout * (ulong)CONFIG_SYS_HZ, 1000);
+#endif
+
+#ifdef CFG_SYS_LOW_RES_TIMER
+	reset_timer();
+#endif
+	start = get_timer(0);
+	schedule();
+
+	while (1) {
+		if (flash_read_stable_expected(info, addr, expected))
+			return FL_ERR_OK;
+
+		if (get_timer(start) > tout) {
+			printf("Flash %s timeout at address %p "
+			       "flash=%02x %02x %02x %02x expected=%016llx\n",
+			       prompt, addr,
+			       flash_read8(addr),
+			       flash_read8(addr + 1),
+			       flash_read8(addr + 2),
+			       flash_read8(addr + 3),
+			       expected ? (unsigned long long)expected->w64 : 0);
+			return FL_ERR_TIMEOUT;
+		}
+		udelay(10);
+	}
 }
 
 /*-----------------------------------------------------------------------
@@ -864,6 +899,90 @@ static void flash_add_byte(flash_info_t *info, cfiword_t *cword, uchar c)
 	}
 }
 
+#ifdef CONFIG_SYS_FLASH_USE_BUFFER_WRITE
+static void flash_make_data_cword(flash_info_t *info, cfiword_t *cword,
+				  const uchar *src)
+{
+	int i;
+
+	cword->w64 = 0;
+	for (i = 0; i < info->portwidth; i++)
+		flash_add_byte(info, cword, src[i]);
+}
+#endif
+
+static int flash_read_stable_erased(flash_info_t *info, void *addr)
+{
+	uint width = info->native_width < info->portwidth ?
+		     info->native_width : info->portwidth;
+
+	switch (width) {
+	case FLASH_CFI_8BIT: {
+		u8 old = flash_read8(addr);
+		u8 cur = flash_read8(addr);
+
+		return old == cur && cur == 0xff;
+	}
+	case FLASH_CFI_16BIT: {
+		u16 old = flash_read16(addr);
+		u16 cur = flash_read16(addr);
+
+		return old == cur && cur == 0xffff;
+	}
+	case FLASH_CFI_32BIT: {
+		u32 old = flash_read32(addr);
+		u32 cur = flash_read32(addr);
+
+		return old == cur && cur == 0xffffffff;
+	}
+	case FLASH_CFI_64BIT: {
+		u64 old = flash_read64(addr);
+		u64 cur = flash_read64(addr);
+
+		return old == cur && cur == 0xffffffffffffffffULL;
+	}
+	default:
+		return 0;
+	}
+}
+
+static int flash_wait_erased_addr(flash_info_t *info, void *addr, ulong tout,
+				  const char *prompt)
+{
+	ulong start;
+
+#if CONFIG_SYS_HZ != 1000
+	/* Avoid overflow for large HZ */
+	if ((ulong)CONFIG_SYS_HZ > 100000)
+		tout *= (ulong)CONFIG_SYS_HZ / 1000;
+	else
+		tout = DIV_ROUND_UP(tout * (ulong)CONFIG_SYS_HZ, 1000);
+#endif
+
+#ifdef CFG_SYS_LOW_RES_TIMER
+	reset_timer();
+#endif
+	start = get_timer(0);
+	schedule();
+
+	while (1) {
+		if (flash_read_stable_erased(info, addr))
+			return FL_ERR_OK;
+
+		if (get_timer(start) > tout) {
+			printf("cfi [%s] not-erased dst=%p "
+			       "flash=%02x %02x %02x %02x\n",
+			       prompt, addr,
+			       flash_read8(addr),
+			       flash_read8(addr + 1),
+			       flash_read8(addr + 2),
+			       flash_read8(addr + 3));
+			return FL_ERR_NOT_ERASED;
+		}
+		schedule();
+	}
+}
+
 /*
  * Loop through the sector table starting from the previously found sector.
  * Searches forwards or backwards, dependent on the passed address.
@@ -892,71 +1011,22 @@ static flash_sect_t find_sector(flash_info_t *info, ulong addr)
 	return sector;
 }
 
-/*
- * Board hook for the pre-write-erase check when portwidth > chipwidth.
- * On boards where the flash is in 8-bit mode on a 16-bit bus, the upper
- * byte read by flash_read16 is garbage and can cause false FL_ERR_NOT_ERASED.
- * Return 1 (erased), 0 (not erased), or -1 (use standard 16-bit check).
- */
-__weak int board_flash_cfi_erase_check16(flash_info_t *info, ulong dest,
-					 cfiword_t cword)
-{
-	return -1;
-}
-
 /*-----------------------------------------------------------------------
  */
 static int flash_write_cfiword(flash_info_t *info, ulong dest, cfiword_t cword)
 {
 	void *dstaddr = (void *)dest;
 	int flag;
+	int retcode;
 	flash_sect_t sect = 0;
 	char sect_found = 0;
 
-	/* Check if Flash is (sufficiently) erased */
-	switch (info->portwidth) {
-	case FLASH_CFI_8BIT:
-		if (cfi_is_amd_standard(info) && flash_read8(dstaddr) == cword.w8)
-			return FL_ERR_OK;
-		flag = ((flash_read8(dstaddr) & cword.w8) == cword.w8);
-		break;
-	case FLASH_CFI_16BIT:
-		if (cfi_is_amd_standard(info) &&
-		    flash_read16(dstaddr) == cword.w16)
-			return FL_ERR_OK;
-		flag = -1;
-		if (cfi_is_amd_standard(info))
-			flag = board_flash_cfi_erase_check16(info, dest, cword);
-		if (flag < 0)
-			flag = ((flash_read16(dstaddr) & cword.w16) == cword.w16);
-		break;
-	case FLASH_CFI_32BIT:
-		if (cfi_is_amd_standard(info) && flash_read32(dstaddr) == cword.w32)
-			return FL_ERR_OK;
-		flag = ((flash_read32(dstaddr) & cword.w32) == cword.w32);
-		break;
-	case FLASH_CFI_64BIT:
-		if (cfi_is_amd_standard(info) && flash_read64(dstaddr) == cword.w64)
-			return FL_ERR_OK;
-		flag = ((flash_read64(dstaddr) & cword.w64) == cword.w64);
-		break;
-	default:
-		flag = 0;
-		break;
-	}
-	if (!flag) {
-		sect = find_sector(info, dest);
-		if (cfi_is_amd_standard(info))
-			printf("cfi write not-erased dst=%08lx sect=%lu "
-			       "sect_start=%08lx flash=%02x %02x %02x %02x "
-			       "word=%04x\n",
-			       dest, (ulong)sect, info->start[sect],
-			       flash_read8((void *)dest),
-			       flash_read8((void *)(dest + 1)),
-			       flash_read8((void *)(dest + 2)),
-			       flash_read8((void *)(dest + 3)),
-			       (u16)cword.w16);
-		return FL_ERR_NOT_ERASED;
+	if (cfi_is_amd_standard(info)) {
+		retcode = flash_wait_erased_addr(info, dstaddr,
+						 info->erase_blk_tout,
+						 "write");
+		if (retcode)
+			return retcode;
 	}
 
 	/* Disable interrupts which might cause a timeout here */
@@ -1009,7 +1079,10 @@ static int flash_write_cfiword(flash_info_t *info, ulong dest, cfiword_t cword)
 	if (!sect_found)
 		sect = find_sector(info, dest);
 
-	if (use_flash_status_poll(info))
+	if (cfi_is_amd_standard(info))
+		return flash_status_check_addr(info, dstaddr, info->write_tout,
+					       "write", &cword);
+	else if (use_flash_status_poll(info))
 		return flash_status_poll(info, &cword, dstaddr,
 					 info->write_tout, "write");
 	else
@@ -1032,6 +1105,7 @@ static int flash_write_cfibuffer(flash_info_t *info, ulong dest, uchar *cp,
 	uint offset = 0;
 	unsigned int shift;
 	uchar write_cmd;
+	cfiword_t expected;
 
 	switch (info->portwidth) {
 	case FLASH_CFI_8BIT:
@@ -1051,41 +1125,37 @@ static int flash_write_cfibuffer(flash_info_t *info, ulong dest, uchar *cp,
 		goto out_unmap;
 	}
 
-	cnt = len >> shift;
+	if (!cfi_is_amd_standard(info)) {
+		cnt = len >> shift;
 
-	while ((cnt-- > 0) && (flag == 1)) {
-		switch (info->portwidth) {
-		case FLASH_CFI_8BIT:
-			flag = ((flash_read8(dst2) & flash_read8(src)) ==
-				flash_read8(src));
-			src += 1, dst2 += 1;
-			break;
-		case FLASH_CFI_16BIT:
-			flag = -1;
-			if (cfi_is_amd_standard(info))
-				flag = board_flash_cfi_erase_check16(info,
-					(ulong)(dst2 - (u8 *)0),
-					get_unaligned((cfiword_t *)src));
-			if (flag < 0)
+		while ((cnt-- > 0) && (flag == 1)) {
+			switch (info->portwidth) {
+			case FLASH_CFI_8BIT:
+				flag = ((flash_read8(dst2) & flash_read8(src)) ==
+					flash_read8(src));
+				src += 1, dst2 += 1;
+				break;
+			case FLASH_CFI_16BIT:
 				flag = ((flash_read16(dst2) & flash_read16(src)) ==
 					flash_read16(src));
-			src += 2, dst2 += 2;
-			break;
-		case FLASH_CFI_32BIT:
-			flag = ((flash_read32(dst2) & flash_read32(src)) ==
-				flash_read32(src));
-			src += 4, dst2 += 4;
-			break;
-		case FLASH_CFI_64BIT:
-			flag = ((flash_read64(dst2) & flash_read64(src)) ==
-				flash_read64(src));
-			src += 8, dst2 += 8;
-			break;
+				src += 2, dst2 += 2;
+				break;
+			case FLASH_CFI_32BIT:
+				flag = ((flash_read32(dst2) & flash_read32(src)) ==
+					flash_read32(src));
+				src += 4, dst2 += 4;
+				break;
+			case FLASH_CFI_64BIT:
+				flag = ((flash_read64(dst2) & flash_read64(src)) ==
+					flash_read64(src));
+				src += 8, dst2 += 8;
+				break;
+			}
 		}
-	}
-	if (!flag) {
-		retcode = FL_ERR_NOT_ERASED;
-		goto out_unmap;
+		if (!flag) {
+			retcode = FL_ERR_NOT_ERASED;
+			goto out_unmap;
+		}
 	}
 
 	src = cp;
@@ -1191,7 +1261,16 @@ static int flash_write_cfibuffer(flash_info_t *info, ulong dest, uchar *cp,
 		flash_write_cmd(info, sector,
 				cfi_is_amd_standard(info) ? offset : 0,
 				AMD_CMD_WRITE_BUFFER_CONFIRM);
-		if (use_flash_status_poll(info))
+		if (cfi_is_amd_standard(info)) {
+			flash_make_data_cword(info, &expected,
+					      cp + len - (1 << shift));
+			retcode = flash_status_check_addr(info,
+							  (void *)(dest + len -
+								   (1 << shift)),
+							  info->buffer_write_tout,
+							  "buffer write",
+							  &expected);
+		} else if (use_flash_status_poll(info))
 			retcode = flash_status_poll(info, src - (1 << shift),
 						    dst - (1 << shift),
 						    info->buffer_write_tout,
@@ -1244,6 +1323,7 @@ int flash_erase(flash_info_t *info, int s_first, int s_last)
 
 	for (sect = s_first; sect <= s_last; sect++) {
 		int attempt;
+		ulong erase_wait_ms = 0;
 
 		if (ctrlc()) {
 			printf("\n");
@@ -1281,6 +1361,8 @@ int flash_erase(flash_info_t *info, int s_first, int s_last)
 			     attempt <= (cfi_is_amd_standard(info) ?
 					 CONFIG_CFI_FLASH_ERASE_RETRIES : 0);
 			     attempt++) {
+				ulong erase_wait_start = 0;
+
 				if (attempt) {
 					flash_write_cmd(info, sect, 0,
 							info->cmd_reset);
@@ -1329,15 +1411,21 @@ int flash_erase(flash_info_t *info, int s_first, int s_last)
 					break;
 				}
 
-				if (info->vendor == CFI_CMDSET_AMD_STANDARD) {
-					cfiword_t erased;
+				if (cfi_is_amd_standard(info))
+					erase_wait_start = get_timer(0);
 
-					flash_make_cmd(info, 0xff, &erased);
-					if (info->erase_blk_typ)
-						udelay(info->erase_blk_typ * 500);
-					st = flash_status_check(info, sect,
-								info->erase_blk_tout,
-								"erase", &erased);
+				if (cfi_is_amd_standard(info) &&
+					   info->erase_blk_typ)
+					udelay(info->erase_blk_typ * 500);
+
+				if (cfi_is_amd_standard(info)) {
+					void *dest;
+
+					dest = flash_map(info, sect, 0);
+					st = flash_wait_erased_addr(info, dest,
+								    info->erase_blk_tout,
+								    "erase");
+					flash_unmap(info, sect, 0, dest);
 				} else if (use_flash_status_poll(info)) {
 					cfiword_t cword;
 					void *dest;
@@ -1354,26 +1442,28 @@ int flash_erase(flash_info_t *info, int s_first, int s_last)
 								     "erase");
 				}
 
+				if (cfi_is_amd_standard(info))
+					erase_wait_ms = get_timer(erase_wait_start);
+
 				if (!st)
 					break;
 			}
 
-			if (cfi_is_amd_standard(info) &&
-			    IS_ENABLED(CONFIG_CFI_FLASH_ERASE_TRACE)) {
+			if (!st && cfi_is_amd_standard(info))
+				board_flash_erase_wait(info->erase_blk_tout);
+
+			if (cfi_is_amd_standard(info)) {
 				ulong addr = info->start[sect];
 				u8 b0 = flash_read8((void *)addr);
 				u8 b1 = flash_read8((void *)(addr + 1));
-				u8 b2 = flash_read8((void *)(addr + 2));
-				u8 b3 = flash_read8((void *)(addr + 3));
 
-				printf("\ncfi erase sect=%lu addr=%08lx "
-				       "size=%lx poll=%s st=%d "
-				       "head=%02x %02x %02x %02x\n",
+				printf("cfi_dbg: erase finished sect=%lu "
+				       "addr=%08lx size=%lx poll=%s "
+				       "st=%d wait_ms=%lu head=%02x %02x\n",
 				       (ulong)sect, addr,
 				       flash_sector_size(info, sect),
-				       use_flash_status_poll(info) ?
-				       "status" : "full",
-				       st, b0, b1, b2, b3);
+				       "erased",
+				       st, erase_wait_ms, b0, b1);
 			}
 
 			if (st)
@@ -1385,9 +1475,6 @@ int flash_erase(flash_info_t *info, int s_first, int s_last)
 
 	if (flash_verbose)
 		puts(" done\n");
-
-	if (!rcode && cfi_is_amd_standard(info))
-		board_flash_erase_wait();
 
 	return rcode;
 }
@@ -1472,8 +1559,9 @@ void flash_print_info(flash_info_t *info)
 	}
 	if (info->vendor == CFI_CMDSET_AMD_STANDARD && info->legacy_unlock)
 		printf("\n  Advanced Sector Protection (PPB) enabled");
-	printf("\n  Erase timeout: %ld ms, write timeout: %ld ms\n",
-	       info->erase_blk_tout, info->write_tout);
+	printf("\n  Erase timeout: typical %ld ms, maximum %ld ms; "
+	       "write timeout: %ld ms\n",
+	       info->erase_blk_typ, info->erase_blk_tout, info->write_tout);
 	if (info->buffer_size > 1) {
 		printf("  Buffer write timeout: %ld ms, ",
 		       info->buffer_write_tout);
@@ -1481,6 +1569,7 @@ void flash_print_info(flash_info_t *info)
 	} else {
 		printf("  Buffer write: N/A\n");
 	}
+	board_flash_print_info(info);
 
 	puts("\n  Sector Start Addresses:");
 	for (i = 0; i < info->sector_count; ++i) {
@@ -1620,8 +1709,13 @@ int write_buff(flash_info_t *info, uchar *src, ulong addr, ulong cnt)
 		if (i > cnt)
 			i = cnt;
 		rc = flash_write_cfibuffer(info, wp, src, i);
-		if (rc != FL_ERR_OK)
+		if (rc != FL_ERR_OK) {
+			printf("cfi buffer write fail rc=%d start=%08lx "
+			       "dst=%08lx sect=%lu len=%x remaining=%08lx\n",
+			       rc, start, wp, (ulong)find_sector(info, wp),
+			       i, cnt);
 			return rc;
+		}
 		i -= i & (info->portwidth - 1);
 		wp += i;
 		src += i;
@@ -1655,8 +1749,10 @@ int write_buff(flash_info_t *info, uchar *src, ulong addr, ulong cnt)
 	}
 #endif /* CONFIG_SYS_FLASH_USE_BUFFER_WRITE */
 
-	if (cnt == 0)
-		return (0);
+	if (cnt == 0) {
+		rc = 0;
+		goto label_return;
+	}
 
 	/*
 	 * handle unaligned tail bytes
@@ -1675,7 +1771,10 @@ int write_buff(flash_info_t *info, uchar *src, ulong addr, ulong cnt)
 		printf("cfi write fail rc=%d start=%08lx dst=%08lx "
 		       "sect=%lu remaining=tail\n",
 		       rc, start, wp, (ulong)find_sector(info, wp));
-
+label_return:
+#if CONFIG_FLASH_SHOW_PROGRESS
+			printf("\n");
+#endif
 	return rc;
 }
 
@@ -2657,6 +2756,8 @@ ulong flash_get_size(phys_addr_t base, int banknum)
 		info->erase_blk_typ = tmp;
 		info->erase_blk_tout = tmp *
 			(1 << qry.block_erase_timeout_max);
+		info->erase_blk_tout =
+			board_flash_erase_timeout(info, info->erase_blk_tout);
 		tmp = (1 << qry.buf_write_timeout_typ) *
 			(1 << qry.buf_write_timeout_max);
 

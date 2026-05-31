@@ -33,7 +33,6 @@ static int simple_bus_post_bind(struct udevice *dev)
 	if (CONFIG_IS_ENABLED(SIMPLE_BUS_CORRECT_RANGE)) {
 		uint64_t caddr, paddr, len;
 
-		/* only read range index 0 */
 		ret = fdt_read_range((void *)gd->fdt_blob, dev_of_offset(dev),
 				     0, &caddr, &paddr, &len);
 		if (!ret) {

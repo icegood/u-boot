@@ -136,6 +136,13 @@ config RESET_MTMIPS
 	help
 	  Support for reset controller on MediaTek MIPS platform.
 
+config RESET_RALINK_SYSC
+	bool "Reset controller driver for Ralink sysc"
+	depends on DM_RESET && ARCH_RALINK
+	default y
+	help
+	  Support reset lines exposed by the Ralink system controller node.
+
 config RESET_NPCM
 	bool "Reset controller driver for Nuvoton BMCs"
 	depends on DM_RESET && ARCH_NPCM

@@ -19,6 +19,7 @@
 #include <search.h>
 #include <errno.h>
 #include <u-boot/crc.h>
+#include <linux/delay.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
@@ -276,17 +277,18 @@ static int env_flash_save(void)
 	if (rc)
 		goto done;
 
-	puts("Erasing Flash...");
+	puts("Erasing Flash...\n");
 	if (flash_sect_erase((long)flash_addr, end_addr))
 		goto done;
 
-	puts("Writing to Flash... ");
+	puts("Writing to Flash...\n");
 	rc = flash_write((char *)&env_new, (long)flash_addr, CONFIG_ENV_SIZE);
 	if (rc != 0)
 		goto perror;
 
 #if CONFIG_ENV_SECT_SIZE > CONFIG_ENV_SIZE
 	if (up_data) {	/* restore the rest of sector */
+		puts("Restoring the rest of data...\n");
 		debug("Restoring the rest of data to 0x%lx len 0x%lx\n",
 			(ulong)flash_addr + CONFIG_ENV_SIZE, up_data);
 		if (flash_write(saved_data,

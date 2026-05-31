@@ -595,6 +595,14 @@ config MT7620_ETH
 	  boards. It has a built-in switch with two configurable ports which
 	  can connect to external PHY/MACs.
 
+config RT3050_ETH
+	bool "Ralink RT3050/RT3052 Ethernet Interface"
+	select PHYLIB
+	help
+	  The Ralink RT3050/RT3052 ethernet interface is used on RT3050,
+	  RT3052, and RT3350 SoC based boards. Includes integrated
+	  5-port 10/100 Ethernet switch.
+
 config MT7628_ETH
 	bool "MediaTek MT7628 Ethernet Interface"
 	depends on SOC_MT7628

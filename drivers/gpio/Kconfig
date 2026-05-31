@@ -672,6 +672,14 @@ config MPC83XX_SPISEL_BOOT
 
 	  This pin is typically used as spi chip select to a spi nor flash.
 
+config RT2880_GPIO
+	bool "Ralink RT2880 GPIO driver"
+	depends on DM_GPIO
+	default y if ARCH_RALINK
+	help
+	  Device model driver for GPIO controller present in Ralink RT2880,
+	  RT3050, RT3052, RT3350 and similar SoCs.
+
 config MT7620_GPIO
 	bool "MediaTek MT7620 GPIO driver"
 	depends on DM_GPIO && SOC_MT7620
