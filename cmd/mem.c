@@ -35,6 +35,11 @@
 #include <linux/delay.h>
 #include <asm/byteorder.h>
 
+__weak bool mem_valid_addr(ulong addr, ulong bytes)
+{
+	return true;
+}
+
 /* Create a compile-time value */
 #if MEM_SUPPORT_64BIT_DATA
 #define HELP_Q ", .q"
@@ -102,6 +107,8 @@ static int do_mem_md(struct cmd_tbl *cmdtp, int flag, int argc,
 	}
 
 	bytes = size * length;
+	if (!mem_valid_addr(addr, bytes))
+		return 1;
 	buf = map_sysmem(addr, bytes);
 
 	/* Print the lines. */
@@ -164,6 +171,8 @@ static int do_mem_mw(struct cmd_tbl *cmdtp, int flag, int argc,
 	}
 
 	bytes = size * count;
+	if (!mem_valid_addr(addr, bytes))
+		return 1;
 	start = map_sysmem(addr, bytes);
 	buf = start;
 	while (count-- > 0) {
@@ -269,6 +278,8 @@ static int do_mem_cmp(struct cmd_tbl *cmdtp, int flag, int argc,
 	count = hextoul(argv[3], NULL);
 
 	bytes = size * count;
+	if (!mem_valid_addr(addr1, bytes) || !mem_valid_addr(addr2, bytes))
+		return 1;
 	base = buf1 = map_sysmem(addr1, bytes);
 	buf2 = map_sysmem(addr2, bytes);
 	for (ngood = 0, ptr1 = buf1, ptr2 = buf2; ngood < count; ++ngood) {
@@ -335,6 +346,10 @@ static int do_mem_cp(struct cmd_tbl *cmdtp, int flag, int argc,
 		puts ("Zero length ???\n");
 		return 1;
 	}
+
+	if (!mem_valid_addr(addr, count * size) ||
+	    !mem_valid_addr(dest, count * size))
+		return 1;
 
 	src = map_sysmem(addr, count * size);
 	dst = map_sysmem(dest, count * size);
@@ -459,6 +474,8 @@ static int do_mem_search(struct cmd_tbl *cmdtp, int flag, int argc,
 	if (size == -2)
 		size = 1;
 	bytes = size * length;
+	if (!mem_valid_addr(addr, bytes))
+		return 1;
 	buf = map_sysmem(addr, bytes);
 	last_pos = 0;
 	last_addr = 0;
@@ -552,6 +569,8 @@ static int do_mem_loop(struct cmd_tbl *cmdtp, int flag, int argc,
 	length = hextoul(argv[2], NULL);
 
 	bytes = size * length;
+	if (!mem_valid_addr(addr, bytes))
+		return 1;
 	buf = map_sysmem(addr, bytes);
 
 	/* We want to optimize the loops to run as fast as possible.
@@ -651,6 +670,8 @@ static int do_mem_loopw(struct cmd_tbl *cmdtp, int flag, int argc,
 		data = hextoul(argv[3], NULL);
 
 	bytes = size * length;
+	if (!mem_valid_addr(addr, bytes))
+		return 1;
 	buf = map_sysmem(addr, bytes);
 
 	/* We want to optimize the loops to run as fast as possible.
