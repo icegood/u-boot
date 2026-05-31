@@ -33,6 +33,7 @@
 #include <linux/compiler.h>
 #include <linux/ctype.h>
 #include <linux/delay.h>
+#include <asm/byteorder.h>
 
 /* Create a compile-time value */
 #if MEM_SUPPORT_64BIT_DATA
@@ -1311,6 +1312,44 @@ static int do_random(struct cmd_tbl *cmdtp, int flag, int argc,
 }
 #endif
 
+#ifdef CONFIG_CMD_ENDIAN
+static int do_mem_endian(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
+{
+	ulong addr;
+	int size, count, i;
+	bool to_le;
+	void *ptr;
+
+	if (argc < 2)
+		return CMD_RET_USAGE;
+
+	size = cmd_get_data_size(argv[0], 4);
+	addr = hextoul(argv[1], NULL);
+	count = (argc >= 3) ? dectoul(argv[2], NULL) : 1;
+	/* Check if we are calling to_le or to_be */
+	to_le = argv[0][3] == 'l';
+
+	/* Map memory for safe access */
+	ptr = map_sysmem(addr, size * count);
+
+	for (i = 0; i < count; i++) {
+		if (to_le) {
+			if (size == 4)
+				*((u32 *)ptr + i) = cpu_to_le32(*((u32 *)ptr + i));
+			else if (size == 2)
+				*((u16 *)ptr + i) = cpu_to_le16(*((u16 *)ptr + i));
+		} else {
+			if (size == 4)
+				*((u32 *)ptr + i) = cpu_to_be32(*((u32 *)ptr + i));
+			else if (size == 2)
+				*((u16 *)ptr + i) = cpu_to_be16(*((u16 *)ptr + i));
+		}
+	}
+
+	unmap_sysmem(ptr);
+	return 0;
+}
+#endif
 /**************************************************/
 U_BOOT_CMD(
 	md,	3,	1,	do_mem_md,
@@ -1430,5 +1469,21 @@ U_BOOT_CMD(
 	"fill memory with random pattern",
 	"<addr> <len> [<seed>]\n"
 	"   - Fill 'len' bytes of memory starting at 'addr' with random data\n"
+);
+#endif
+
+#ifdef CONFIG_CMD_ENDIAN
+U_BOOT_CMD(
+	to_le, 3, 1, do_mem_endian,
+	"Convert memory to Little Endian",
+	"[.w, .l] address [count]\n"
+	"    - Converts data to Little Endian only if CPU is Big Endian"
+);
+
+U_BOOT_CMD(
+	to_be, 3, 1, do_mem_endian,
+	"Convert memory to Big Endian",
+	"[.w, .l] address [count]\n"
+	"    - Converts data to Big Endian only if CPU is Little Endian"
 );
 #endif

@@ -803,6 +803,15 @@ endmenu
 
 menu "Memory commands"
 
+config CMD_ENDIAN
+	bool "Endianness conversion commands (to_le, to_be)"
+	default n
+	help
+	  Allows converting memory blocks to a specific endianness.
+	  Useful for fixing headers or preparing data for hardware
+	  with different endianness than the CPU.
+
+
 config CMD_BINOP
 	bool "binop"
 	help
