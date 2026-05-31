@@ -104,6 +104,7 @@ static int spl_nor_load_image(struct spl_image_info *spl_image,
 	 * defined location in SDRAM
 	 */
 	spl_load_init(&load, spl_nor_load_read, NULL, 1);
+	puts("SPL: loading U-Boot from NOR\n");
 	return spl_load(spl_image, bootdev, &load, 0, spl_nor_get_uboot_base());
 }
 SPL_LOAD_IMAGE_METHOD("NOR", 0, BOOT_DEVICE_NOR, spl_nor_load_image);

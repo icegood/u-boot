@@ -231,13 +231,13 @@ static int show_dram_config(void)
 	}
 	debug("\nDRAM:  ");
 
-	print_size(gd->ram_size, "");
+	print_size(gd->ram_size, "\n");
 	if (!sizes_near(gd->ram_size, size)) {
 		printf(" (total ");
-		print_size(size, ")");
+		print_size(size, ")\n");
 	}
 	board_add_ram_info(0);
-	putc('\n');
+	printf("SDR_DONE\n");
 
 	return 0;
 }
@@ -749,6 +749,8 @@ static int fix_fdt(void)
 /* ARM calls relocate_code from its crt0.S */
 #if !defined(CONFIG_ARM) && !defined(CONFIG_SANDBOX)
 
+extern void relocate_code(ulong, gd_t *, ulong);
+
 static int jump_to_copy(void)
 {
 	if (gd->flags & GD_FLG_SKIP_RELOC)
@@ -763,7 +765,7 @@ static int jump_to_copy(void)
 	 */
 #if defined(CONFIG_X86) || defined(CONFIG_ARC)
 	/*
-	 * SDRAM and console are now initialised. The final stack can now
+	 * SDRAM and RAM are now initialised. The final stack can now
 	 * be setup in SDRAM. Code execution will continue in Flash, but
 	 * with the stack in SDRAM and Global Data in temporary memory
 	 * (CPU cache)
@@ -775,6 +777,19 @@ static int jump_to_copy(void)
 		board_init_f_r_trampoline(gd->start_addr_sp);
 # endif
 #else
+	printf("jump_to_copy: calling relocate_code\n");
+	{
+		char tmp[32];
+		int i = 0;
+		unsigned long v = (unsigned long)gd->relocaddr;
+		int j;
+		for (j = 28; j >= 0; j -= 4) {
+			unsigned int nib = (v >> j) & 0xf;
+			tmp[i++] = nib < 10 ? '0' + nib : 'a' + nib - 10;
+		}
+		tmp[i] = '\0';
+		printf("  relocaddr=%s\n", tmp);
+	}
 	relocate_code(gd->start_addr_sp, gd->new_gd, gd->relocaddr);
 #endif
 
@@ -1042,6 +1057,7 @@ void board_init_f(ulong boot_flags)
 		!defined(CONFIG_EFI_APP) && !CONFIG_IS_ENABLED(X86_64) && \
 		!defined(CONFIG_ARC)
 	/* NOTREACHED - jump_to_copy() does not return */
+	printf("Program will hang!");
 	hang();
 #endif
 }
