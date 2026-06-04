@@ -521,6 +521,15 @@ config CMD_BOOTMENU
 	help
 	  Add an ANSI terminal boot menu command.
 
+config BOOTMENU_ANSI
+	bool "Use ANSI terminal controls for bootmenu"
+	depends on CMD_BOOTMENU
+	default y
+	help
+	  Draw bootmenu with ANSI cursor movement and screen updates.
+	  Disable this for simple serial consoles which should use a plain
+	  numeric menu without cursor positioning.
+
 config CMD_ADTIMG
 	bool "adtimg"
 	help

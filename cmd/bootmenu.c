@@ -27,6 +27,14 @@
  */
 #define MAX_ENV_SIZE	(9 + 2 + 1)
 
+#if CONFIG_IS_ENABLED(BOOTMENU_ANSI)
+#define BOOTMENU_HELP_SHORT	"ANSI terminal bootmenu"
+#define BOOTMENU_HELP_DELAY	"delay - show ANSI terminal bootmenu with autoboot delay"
+#else
+#define BOOTMENU_HELP_SHORT	"numeric terminal bootmenu"
+#define BOOTMENU_HELP_DELAY	"delay - show numeric terminal bootmenu with autoboot delay"
+#endif
+
 enum bootmenu_ret {
 	BOOTMENU_RET_SUCCESS = 0,
 	BOOTMENU_RET_FAIL,
@@ -62,6 +70,7 @@ static char *bootmenu_getoption(unsigned short int n)
 	return env_get(name);
 }
 
+#if CONFIG_IS_ENABLED(BOOTMENU_ANSI)
 static void bootmenu_print_entry(void *data)
 {
 	struct bootmenu_entry *entry = data;
@@ -153,6 +162,7 @@ static bool bootmenu_need_reprint(void *data)
 
 	return need_reprint;
 }
+#endif
 
 static void bootmenu_destroy(struct bootmenu_data *menu)
 {
@@ -469,6 +479,7 @@ cleanup:
 	return NULL;
 }
 
+#if CONFIG_IS_ENABLED(BOOTMENU_ANSI)
 static void menu_display_statusline(struct menu *m)
 {
 	struct bootmenu_entry *entry;
@@ -496,6 +507,7 @@ static void menu_display_statusline(struct menu *m)
 	printf(ANSI_CURSOR_POSITION, menu->count + 7, 1);
 	puts(ANSI_CLEAR_LINE);
 }
+#endif
 
 static void handle_uefi_bootnext(void)
 {
@@ -518,6 +530,92 @@ static void handle_uefi_bootnext(void)
 		run_command("bootefi bootmgr", 0);
 }
 
+static struct bootmenu_entry *bootmenu_entry_by_index(struct bootmenu_data *menu,
+						      int index)
+{
+	struct bootmenu_entry *iter = menu->first;
+
+	while (iter) {
+		if (iter->num == index)
+			return iter;
+		iter = iter->next;
+	}
+
+	return NULL;
+}
+
+static int bootmenu_numeric_index(int c)
+{
+	if (c >= '1' && c <= '9')
+		return c - '1';
+	if (c >= 'a' && c <= 'z')
+		return c - 'a' + 9;
+	if (c >= 'A' && c <= 'Z')
+		return c - 'A' + 9;
+
+	return -1;
+}
+
+static enum bootmenu_ret bootmenu_show_numeric(struct bootmenu_data *bootmenu)
+{
+	struct bootmenu_entry *entry;
+	char *command;
+	int c = '\n';
+
+	puts("\n*** U-Boot Boot Menu ***\n\n");
+	for (entry = bootmenu->first; entry; entry = entry->next)
+		printf("   %s\n", entry->title);
+
+	if (bootmenu->delay >= 0) {
+		putc('\n');
+		while (bootmenu->delay > 0) {
+			printf("\rPress 1-9/a-z to select, ENTER for default, 0 to exit: %d ",
+			       bootmenu->delay);
+			for (int i = 0; i < 100; i++) {
+				if (tstc()) {
+					c = getchar();
+					bootmenu->delay = -1;
+					goto selected;
+				}
+				mdelay(10);
+			}
+			bootmenu->delay--;
+		}
+	} else {
+		printf("\nPress 1-9/a-z to select, ENTER for default, 0 to exit: ");
+		while (!tstc())
+			mdelay(10);
+		c = getchar();
+	}
+
+selected:
+	putc('\n');
+
+	if (c == '0')
+		entry = bootmenu_entry_by_index(bootmenu, bootmenu->count - 1);
+	else if (c == '\r' || c == '\n')
+		entry = bootmenu_entry_by_index(bootmenu, bootmenu->active);
+	else
+		entry = bootmenu_entry_by_index(bootmenu, bootmenu_numeric_index(c));
+
+	if (!entry) {
+		puts("Invalid menu selection\n");
+		return BOOTMENU_RET_FAIL;
+	}
+
+	if (entry->num == entry->menu->count - 1)
+		return BOOTMENU_RET_QUIT;
+
+	command = strdup(entry->command);
+	if (!command)
+		return BOOTMENU_RET_FAIL;
+
+	c = run_command(command, 0);
+	free(command);
+
+	return c == CMD_RET_SUCCESS ? BOOTMENU_RET_SUCCESS : BOOTMENU_RET_FAIL;
+}
+
 /**
  * bootmenu_show - display boot menu
  *
@@ -527,15 +625,8 @@ static void handle_uefi_bootnext(void)
 static enum bootmenu_ret bootmenu_show(int uefi, int delay)
 {
 	int cmd_ret;
-	int init = 0;
-	void *choice = NULL;
-	char *title = NULL;
-	char *command = NULL;
-	struct menu *menu;
-	struct bootmenu_entry *iter;
 	int ret = BOOTMENU_RET_SUCCESS;
 	struct bootmenu_data *bootmenu;
-	efi_status_t efi_ret = EFI_SUCCESS;
 	char *option, *sep;
 
 	if (IS_ENABLED(CONFIG_CMD_BOOTEFI_BOOTMGR) && uefi)
@@ -560,6 +651,25 @@ static enum bootmenu_ret bootmenu_show(int uefi, int delay)
 	bootmenu = bootmenu_create(uefi, delay);
 	if (!bootmenu)
 		return BOOTMENU_RET_FAIL;
+
+#if !CONFIG_IS_ENABLED(BOOTMENU_ANSI)
+	if (uefi) {
+		puts("UEFI bootmenu requires ANSI terminal support\n");
+		bootmenu_destroy(bootmenu);
+		return BOOTMENU_RET_FAIL;
+	}
+
+	ret = bootmenu_show_numeric(bootmenu);
+	bootmenu_destroy(bootmenu);
+	return ret;
+#else
+	int init = 0;
+	void *choice = NULL;
+	char *title = NULL;
+	char *command = NULL;
+	struct menu *menu;
+	struct bootmenu_entry *iter;
+	efi_status_t efi_ret = EFI_SUCCESS;
 
 	menu = menu_create(NULL, bootmenu->delay, 1, menu_display_statusline,
 			   bootmenu_print_entry, bootmenu_choice_entry,
@@ -644,6 +754,7 @@ cleanup:
 		ret = BOOTMENU_RET_FAIL;
 
 	return ret;
+#endif
 }
 
 #ifdef CONFIG_AUTOBOOT_MENU_SHOW
@@ -706,8 +817,8 @@ int do_bootmenu(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
 
 U_BOOT_CMD(
 	bootmenu, 2, 1, do_bootmenu,
-	"ANSI terminal bootmenu",
+	BOOTMENU_HELP_SHORT,
 	"[-e] [delay]\n"
 	"-e    - show UEFI entries\n"
-	"delay - show ANSI terminal bootmenu with autoboot delay"
+	BOOTMENU_HELP_DELAY
 );
