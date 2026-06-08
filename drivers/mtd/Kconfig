@@ -118,6 +118,23 @@ config SYS_CFI_FLASH_STATUS_POLL
 	bool "Poll status on AMD flash chips"
 	depends on FLASH_CFI_DRIVER
 
+config CFI_FLASH_ERASE_TRACE
+	bool "Trace CFI flash sector erase progress"
+	depends on FLASH_CFI_DRIVER
+	help
+	  Print one diagnostic line per erased sector, including sector
+	  address, status result, polling method, and a small post-erase byte
+	  sample. Useful when debugging erase completion or command transport
+	  issues on parallel NOR flash.
+
+config CFI_FLASH_ERASE_RETRIES
+	int "CFI sector erase retries"
+	depends on FLASH_CFI_DRIVER
+	default 0
+	help
+	  Number of extra erase-command attempts for a sector when the normal
+	  status check or erase-verify wait fails.
+
 config SYS_FLASH_USE_BUFFER_WRITE
 	bool "Enable buffered writes to flash"
 	depends on FLASH_CFI_DRIVER

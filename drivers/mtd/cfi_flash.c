@@ -175,6 +175,22 @@ __maybe_weak u64 flash_read64(void *addr)
 	return *(volatile u64 *)addr;
 }
 
+/*
+ * Optional command transport hook.  Return 0 if the command was handled, or
+ * non-zero to use the normal memory-mapped flash write.
+ */
+__weak int cfi_flash_write_cmd_transport(flash_info_t *info, flash_sect_t sect,
+					 uint offset, u32 cmd, void *addr,
+					 cfiword_t *cword)
+{
+	return -ENOSYS;
+}
+
+static bool cfi_is_amd_standard(const flash_info_t *info)
+{
+	return info->vendor == CFI_CMDSET_AMD_STANDARD;
+}
+
 /*-----------------------------------------------------------------------
  */
 #if defined(CONFIG_ENV_IS_IN_FLASH) || defined(CONFIG_ENV_ADDR_REDUND) || \
@@ -363,39 +379,41 @@ static void flash_write_cmd(flash_info_t *info, flash_sect_t sect,
 
 	addr = flash_map(info, sect, offset);
 	flash_make_cmd(info, cmd, &cword);
+
+	if (cfi_is_amd_standard(info) &&
+	    !cfi_flash_write_cmd_transport(info, sect, offset, cmd, addr,
+					   &cword)) {
+		sync();
+		flash_unmap(info, sect, offset, addr);
+		return;
+	}
+
 	switch (info->portwidth) {
 	case FLASH_CFI_8BIT:
-		debug("fwc addr %p cmd %x %x 8bit x %d bit\n", addr, cmd,
-		      cword.w8, info->chipwidth << CFI_FLASH_SHIFT_WIDTH);
 		flash_write8(cword.w8, addr);
 		break;
 	case FLASH_CFI_16BIT:
-		debug("fwc addr %p cmd %x %4.4x 16bit x %d bit\n", addr,
-		      cmd, cword.w16,
-		      info->chipwidth << CFI_FLASH_SHIFT_WIDTH);
 		flash_write16(cword.w16, addr);
 		break;
 	case FLASH_CFI_32BIT:
-		debug("fwc addr %p cmd %x %8.8x 32bit x %d bit\n", addr,
-		      cmd, cword.w32,
-		      info->chipwidth << CFI_FLASH_SHIFT_WIDTH);
 		flash_write32(cword.w32, addr);
 		break;
 	case FLASH_CFI_64BIT:
-#ifdef DEBUG
-		{
-			char str[20];
-
-			print_longlong(str, cword.w64);
-
-			debug("fwrite addr %p cmd %x %s 64 bit x %d bit\n",
-			      addr, cmd, str,
-			      info->chipwidth << CFI_FLASH_SHIFT_WIDTH);
-		}
-#endif
 		flash_write64(cword.w64, addr);
 		break;
 	}
+
+	debug("fwc addr=%p cmd=0x%02x val=0x%0*x"
+	      " port=%dbit chip=%dbit iface=%d lsb=%d\n",
+	      addr, cmd,
+	      info->portwidth * 2, /* hex digits = bytes * 2 */
+	      (info->portwidth == FLASH_CFI_8BIT)  ? (u32)cword.w8  :
+	      (info->portwidth == FLASH_CFI_16BIT) ? (u32)cword.w16 :
+	      (info->portwidth == FLASH_CFI_32BIT) ? (u32)cword.w32 : 0,
+	      info->portwidth  << CFI_FLASH_SHIFT_WIDTH,
+	      info->chipwidth  << CFI_FLASH_SHIFT_WIDTH,
+	      info->interface,
+	      info->chip_lsb);
 
 	/* Ensure all the instructions are fully finished */
 	sync();
@@ -407,6 +425,21 @@ static void flash_unlock_seq(flash_info_t *info, flash_sect_t sect)
 {
 	flash_write_cmd(info, sect, info->addr_unlock1, AMD_CMD_UNLOCK_START);
 	flash_write_cmd(info, sect, info->addr_unlock2, AMD_CMD_UNLOCK_ACK);
+}
+
+__weak flash_sect_t board_flash_amd_unlock_sect(flash_info_t *info,
+						flash_sect_t sect)
+{
+	return sect;
+}
+
+static void flash_amd_unlock_seq(flash_info_t *info, flash_sect_t sect)
+{
+	flash_unlock_seq(info, board_flash_amd_unlock_sect(info, sect));
+}
+
+__weak void board_flash_erase_wait(void)
+{
 }
 
 /*-----------------------------------------------------------------------
@@ -501,6 +534,24 @@ static int flash_toggle(flash_info_t *info, flash_sect_t sect, uint offset,
 
 	addr = flash_map(info, sect, offset);
 	flash_make_cmd(info, cmd, &cword);
+
+	/*
+	 * When the flash chip has fewer data lines than the system bus
+	 * (e.g. 8-bit flash on 16-bit bus), the undriven upper data lines
+	 * float and can keep the toggle check falsely reporting "busy"
+	 * even after the embedded algorithm completes.  Use reads the
+	 * width of the chip so only valid data lines affect the comparison.
+	 */
+	if (cfi_is_amd_standard(info) && info->native_width < info->portwidth) {
+		switch (info->native_width) {
+		case FLASH_CFI_8BIT:
+			retval = flash_read8(addr) != flash_read8(addr);
+			goto out;
+		default:
+			break;
+		}
+	}
+
 	switch (info->portwidth) {
 	case FLASH_CFI_8BIT:
 		retval = flash_read8(addr) != flash_read8(addr);
@@ -519,9 +570,52 @@ static int flash_toggle(flash_info_t *info, flash_sect_t sect, uint offset,
 		retval = 0;
 		break;
 	}
+
+out:
 	flash_unmap(info, sect, offset, addr);
 
 	return retval;
+}
+
+static int flash_read_stable_expected(flash_info_t *info, void *addr,
+				      cfiword_t *expected)
+{
+	switch (info->portwidth) {
+	case FLASH_CFI_8BIT: {
+		u8 old = flash_read8(addr);
+		u8 cur = flash_read8(addr);
+
+		return old == cur && (!expected || cur == expected->w8);
+	}
+	case FLASH_CFI_16BIT:
+		if (info->native_width < info->portwidth &&
+		    info->native_width == FLASH_CFI_8BIT) {
+			u8 old = flash_read8(addr);
+			u8 cur = flash_read8(addr);
+
+			return old == cur && (!expected ||
+					      cur == (u8)expected->w16);
+		} else {
+			u16 old = flash_read16(addr);
+			u16 cur = flash_read16(addr);
+
+			return old == cur && (!expected || cur == expected->w16);
+		}
+	case FLASH_CFI_32BIT: {
+		u32 old = flash_read32(addr);
+		u32 cur = flash_read32(addr);
+
+		return old == cur && (!expected || cur == expected->w32);
+	}
+	case FLASH_CFI_64BIT: {
+		u64 old = flash_read64(addr);
+		u64 cur = flash_read64(addr);
+
+		return old == cur && (!expected || cur == expected->w64);
+	}
+	default:
+		return 0;
+	}
 }
 
 /*
@@ -568,9 +662,10 @@ static int flash_is_busy(flash_info_t *info, flash_sect_t sect)
  *  This routine does not set the flash to read-array mode.
  */
 static int flash_status_check(flash_info_t *info, flash_sect_t sector,
-			      ulong tout, char *prompt)
+			      ulong tout, char *prompt, cfiword_t *expected)
 {
 	ulong start;
+	void *addr;
 
 #if CONFIG_SYS_HZ != 1000
 	/* Avoid overflow for large HZ */
@@ -586,17 +681,32 @@ static int flash_status_check(flash_info_t *info, flash_sect_t sector,
 #endif
 	start = get_timer(0);
 	schedule();
-	while (flash_is_busy(info, sector)) {
+
+	addr = flash_map(info, sector, 0);
+	while (1) {
+		int ready;
+
+		if (expected)
+			ready = flash_read_stable_expected(info, addr, expected);
+		else
+			ready = !flash_is_busy(info, sector);
+
+		if (ready)
+			break;
+
 		if (get_timer(start) > tout) {
 			printf("Flash %s timeout at address %lx data %lx\n",
 			       prompt, info->start[sector],
 			       flash_read_long(info, sector, 0));
+			flash_unmap(info, sector, 0, addr);
 			flash_write_cmd(info, sector, 0, info->cmd_reset);
 			udelay(1);
 			return FL_ERR_TIMEOUT;
 		}
 		udelay(1);		/* also triggers watchdog */
 	}
+	flash_unmap(info, sector, 0, addr);
+
 	return FL_ERR_OK;
 }
 
@@ -611,7 +721,7 @@ static int flash_full_status_check(flash_info_t *info, flash_sect_t sector,
 {
 	int retcode;
 
-	retcode = flash_status_check(info, sector, tout, prompt);
+	retcode = flash_status_check(info, sector, tout, prompt, NULL);
 	switch (info->vendor) {
 	case CFI_CMDSET_INTEL_PROG_REGIONS:
 	case CFI_CMDSET_INTEL_EXTENDED:
@@ -782,6 +892,18 @@ static flash_sect_t find_sector(flash_info_t *info, ulong addr)
 	return sector;
 }
 
+/*
+ * Board hook for the pre-write-erase check when portwidth > chipwidth.
+ * On boards where the flash is in 8-bit mode on a 16-bit bus, the upper
+ * byte read by flash_read16 is garbage and can cause false FL_ERR_NOT_ERASED.
+ * Return 1 (erased), 0 (not erased), or -1 (use standard 16-bit check).
+ */
+__weak int board_flash_cfi_erase_check16(flash_info_t *info, ulong dest,
+					 cfiword_t cword)
+{
+	return -1;
+}
+
 /*-----------------------------------------------------------------------
  */
 static int flash_write_cfiword(flash_info_t *info, ulong dest, cfiword_t cword)
@@ -794,23 +916,48 @@ static int flash_write_cfiword(flash_info_t *info, ulong dest, cfiword_t cword)
 	/* Check if Flash is (sufficiently) erased */
 	switch (info->portwidth) {
 	case FLASH_CFI_8BIT:
+		if (cfi_is_amd_standard(info) && flash_read8(dstaddr) == cword.w8)
+			return FL_ERR_OK;
 		flag = ((flash_read8(dstaddr) & cword.w8) == cword.w8);
 		break;
 	case FLASH_CFI_16BIT:
-		flag = ((flash_read16(dstaddr) & cword.w16) == cword.w16);
+		if (cfi_is_amd_standard(info) &&
+		    flash_read16(dstaddr) == cword.w16)
+			return FL_ERR_OK;
+		flag = -1;
+		if (cfi_is_amd_standard(info))
+			flag = board_flash_cfi_erase_check16(info, dest, cword);
+		if (flag < 0)
+			flag = ((flash_read16(dstaddr) & cword.w16) == cword.w16);
 		break;
 	case FLASH_CFI_32BIT:
+		if (cfi_is_amd_standard(info) && flash_read32(dstaddr) == cword.w32)
+			return FL_ERR_OK;
 		flag = ((flash_read32(dstaddr) & cword.w32) == cword.w32);
 		break;
 	case FLASH_CFI_64BIT:
+		if (cfi_is_amd_standard(info) && flash_read64(dstaddr) == cword.w64)
+			return FL_ERR_OK;
 		flag = ((flash_read64(dstaddr) & cword.w64) == cword.w64);
 		break;
 	default:
 		flag = 0;
 		break;
 	}
-	if (!flag)
+	if (!flag) {
+		sect = find_sector(info, dest);
+		if (cfi_is_amd_standard(info))
+			printf("cfi write not-erased dst=%08lx sect=%lu "
+			       "sect_start=%08lx flash=%02x %02x %02x %02x "
+			       "word=%04x\n",
+			       dest, (ulong)sect, info->start[sect],
+			       flash_read8((void *)dest),
+			       flash_read8((void *)(dest + 1)),
+			       flash_read8((void *)(dest + 2)),
+			       flash_read8((void *)(dest + 3)),
+			       (u16)cword.w16);
 		return FL_ERR_NOT_ERASED;
+	}
 
 	/* Disable interrupts which might cause a timeout here */
 	flag = disable_interrupts();
@@ -825,8 +972,9 @@ static int flash_write_cfiword(flash_info_t *info, ulong dest, cfiword_t cword)
 	case CFI_CMDSET_AMD_EXTENDED:
 	case CFI_CMDSET_AMD_STANDARD:
 		sect = find_sector(info, dest);
-		flash_unlock_seq(info, sect);
-		flash_write_cmd(info, sect, info->addr_unlock1, AMD_CMD_WRITE);
+		flash_amd_unlock_seq(info, sect);
+		flash_write_cmd(info, board_flash_amd_unlock_sect(info, sect),
+				info->addr_unlock1, AMD_CMD_WRITE);
 		sect_found = 1;
 		break;
 #ifdef CONFIG_FLASH_CFI_LEGACY
@@ -913,8 +1061,14 @@ static int flash_write_cfibuffer(flash_info_t *info, ulong dest, uchar *cp,
 			src += 1, dst2 += 1;
 			break;
 		case FLASH_CFI_16BIT:
-			flag = ((flash_read16(dst2) & flash_read16(src)) ==
-				flash_read16(src));
+			flag = -1;
+			if (cfi_is_amd_standard(info))
+				flag = board_flash_cfi_erase_check16(info,
+					(ulong)(dst2 - (u8 *)0),
+					get_unaligned((cfiword_t *)src));
+			if (flag < 0)
+				flag = ((flash_read16(dst2) & flash_read16(src)) ==
+					flash_read16(src));
 			src += 2, dst2 += 2;
 			break;
 		case FLASH_CFI_32BIT:
@@ -949,7 +1103,7 @@ static int flash_write_cfibuffer(flash_info_t *info, ulong dest, uchar *cp,
 		flash_write_cmd(info, sector, 0, write_cmd);
 		retcode = flash_status_check(info, sector,
 					     info->buffer_write_tout,
-					     "write to buffer");
+					     "write to buffer", NULL);
 		if (retcode == FL_ERR_OK) {
 			/* reduce the number of loops by the width of
 			 * the port
@@ -990,11 +1144,16 @@ static int flash_write_cfibuffer(flash_info_t *info, ulong dest, uchar *cp,
 
 	case CFI_CMDSET_AMD_STANDARD:
 	case CFI_CMDSET_AMD_EXTENDED:
-		flash_unlock_seq(info, sector);
+		flash_amd_unlock_seq(info, sector);
 
 #ifdef CONFIG_FLASH_SPANSION_S29WS_N
 		offset = ((unsigned long)dst - info->start[sector]) >> shift;
 #endif
+		if (cfi_is_amd_standard(info)) {
+			offset = (unsigned long)dst - info->start[sector];
+			if (info->chip_lsb)
+				offset >>= shift;
+		}
 		flash_write_cmd(info, sector, offset, AMD_CMD_WRITE_TO_BUFFER);
 		cnt = len >> shift;
 		flash_write_cmd(info, sector, offset, cnt - 1);
@@ -1029,7 +1188,9 @@ static int flash_write_cfibuffer(flash_info_t *info, ulong dest, uchar *cp,
 			goto out_unmap;
 		}
 
-		flash_write_cmd(info, sector, 0, AMD_CMD_WRITE_BUFFER_CONFIRM);
+		flash_write_cmd(info, sector,
+				cfi_is_amd_standard(info) ? offset : 0,
+				AMD_CMD_WRITE_BUFFER_CONFIRM);
 		if (use_flash_status_poll(info))
 			retcode = flash_status_poll(info, src - (1 << shift),
 						    dst - (1 << shift),
@@ -1082,6 +1243,8 @@ int flash_erase(flash_info_t *info, int s_first, int s_last)
 	}
 
 	for (sect = s_first; sect <= s_last; sect++) {
+		int attempt;
+
 		if (ctrlc()) {
 			printf("\n");
 			return 1;
@@ -1114,57 +1277,103 @@ int flash_erase(flash_info_t *info, int s_first, int s_last)
 				continue;
 			}
 #endif
-			switch (info->vendor) {
-			case CFI_CMDSET_INTEL_PROG_REGIONS:
-			case CFI_CMDSET_INTEL_STANDARD:
-			case CFI_CMDSET_INTEL_EXTENDED:
-				flash_write_cmd(info, sect, 0,
-						FLASH_CMD_CLEAR_STATUS);
-				flash_write_cmd(info, sect, 0,
-						FLASH_CMD_BLOCK_ERASE);
-				flash_write_cmd(info, sect, 0,
-						FLASH_CMD_ERASE_CONFIRM);
-				break;
-			case CFI_CMDSET_AMD_STANDARD:
-			case CFI_CMDSET_AMD_EXTENDED:
-				flash_unlock_seq(info, sect);
-				flash_write_cmd(info, sect,
-						info->addr_unlock1,
-						AMD_CMD_ERASE_START);
-				flash_unlock_seq(info, sect);
-				flash_write_cmd(info, sect, 0,
-						info->cmd_erase_sector);
-				break;
+			for (attempt = 0;
+			     attempt <= (cfi_is_amd_standard(info) ?
+					 CONFIG_CFI_FLASH_ERASE_RETRIES : 0);
+			     attempt++) {
+				if (attempt) {
+					flash_write_cmd(info, sect, 0,
+							info->cmd_reset);
+					udelay(100);
+					if (cfi_is_amd_standard(info) &&
+					    IS_ENABLED(CONFIG_CFI_FLASH_ERASE_TRACE))
+						printf("cfi erase retry sect=%lu attempt=%d\n",
+						       (ulong)sect, attempt);
+				}
+
+				switch (info->vendor) {
+				case CFI_CMDSET_INTEL_PROG_REGIONS:
+				case CFI_CMDSET_INTEL_STANDARD:
+				case CFI_CMDSET_INTEL_EXTENDED:
+					flash_write_cmd(info, sect, 0,
+							FLASH_CMD_CLEAR_STATUS);
+					flash_write_cmd(info, sect, 0,
+							FLASH_CMD_BLOCK_ERASE);
+					flash_write_cmd(info, sect, 0,
+							FLASH_CMD_ERASE_CONFIRM);
+					break;
+				case CFI_CMDSET_AMD_STANDARD:
+				case CFI_CMDSET_AMD_EXTENDED:
+					flash_amd_unlock_seq(info, sect);
+					flash_write_cmd(info,
+							board_flash_amd_unlock_sect(info, sect),
+							info->addr_unlock1,
+							AMD_CMD_ERASE_START);
+					flash_amd_unlock_seq(info, sect);
+					flash_write_cmd(info, sect, 0,
+							info->cmd_erase_sector);
+					break;
 #ifdef CONFIG_FLASH_CFI_LEGACY
-			case CFI_CMDSET_AMD_LEGACY:
-				flash_unlock_seq(info, 0);
-				flash_write_cmd(info, 0, info->addr_unlock1,
-						AMD_CMD_ERASE_START);
-				flash_unlock_seq(info, 0);
-				flash_write_cmd(info, sect, 0,
-						AMD_CMD_ERASE_SECTOR);
-				break;
+				case CFI_CMDSET_AMD_LEGACY:
+					flash_unlock_seq(info, 0);
+					flash_write_cmd(info, 0, info->addr_unlock1,
+							AMD_CMD_ERASE_START);
+					flash_unlock_seq(info, 0);
+					flash_write_cmd(info, sect, 0,
+							AMD_CMD_ERASE_SECTOR);
+					break;
 #endif
-			default:
-				debug("Unknown flash vendor %d\n",
-				      info->vendor);
-				break;
+				default:
+					debug("Unknown flash vendor %d\n",
+					      info->vendor);
+					break;
+				}
+
+				if (info->vendor == CFI_CMDSET_AMD_STANDARD) {
+					cfiword_t erased;
+
+					flash_make_cmd(info, 0xff, &erased);
+					if (info->erase_blk_typ)
+						udelay(info->erase_blk_typ * 500);
+					st = flash_status_check(info, sect,
+								info->erase_blk_tout,
+								"erase", &erased);
+				} else if (use_flash_status_poll(info)) {
+					cfiword_t cword;
+					void *dest;
+
+					cword.w64 = 0xffffffffffffffffULL;
+					dest = flash_map(info, sect, 0);
+					st = flash_status_poll(info, &cword, dest,
+							       info->erase_blk_tout,
+							       "erase");
+					flash_unmap(info, sect, 0, dest);
+				} else {
+					st = flash_full_status_check(info, sect,
+								     info->erase_blk_tout,
+								     "erase");
+				}
+
+				if (!st)
+					break;
 			}
 
-			if (use_flash_status_poll(info)) {
-				cfiword_t cword;
-				void *dest;
+			if (cfi_is_amd_standard(info) &&
+			    IS_ENABLED(CONFIG_CFI_FLASH_ERASE_TRACE)) {
+				ulong addr = info->start[sect];
+				u8 b0 = flash_read8((void *)addr);
+				u8 b1 = flash_read8((void *)(addr + 1));
+				u8 b2 = flash_read8((void *)(addr + 2));
+				u8 b3 = flash_read8((void *)(addr + 3));
 
-				cword.w64 = 0xffffffffffffffffULL;
-				dest = flash_map(info, sect, 0);
-				st = flash_status_poll(info, &cword, dest,
-						       info->erase_blk_tout,
-						       "erase");
-				flash_unmap(info, sect, 0, dest);
-			} else {
-				st = flash_full_status_check(info, sect,
-							     info->erase_blk_tout,
-							     "erase");
+				printf("\ncfi erase sect=%lu addr=%08lx "
+				       "size=%lx poll=%s st=%d "
+				       "head=%02x %02x %02x %02x\n",
+				       (ulong)sect, addr,
+				       flash_sector_size(info, sect),
+				       use_flash_status_poll(info) ?
+				       "status" : "full",
+				       st, b0, b1, b2, b3);
 			}
 
 			if (st)
@@ -1176,6 +1385,9 @@ int flash_erase(flash_info_t *info, int s_first, int s_last)
 
 	if (flash_verbose)
 		puts(" done\n");
+
+	if (!rcode && cfi_is_amd_standard(info))
+		board_flash_erase_wait();
 
 	return rcode;
 }
@@ -1213,9 +1425,11 @@ void flash_print_info(flash_info_t *info)
 		return;
 	}
 
-	printf("%s flash (%d x %d)",
+	printf("%s flash  bus %d-bit, chip %d-bit (native %d-bit)",
 	       info->name,
-	       (info->portwidth << 3), (info->chipwidth << 3));
+	       info->portwidth     << CFI_FLASH_SHIFT_WIDTH,
+	       info->chipwidth     << CFI_FLASH_SHIFT_WIDTH,
+	       info->native_width  << CFI_FLASH_SHIFT_WIDTH);
 	if (info->size < 1024 * 1024)
 		printf("  Size: %ld kB in %d Sectors\n",
 		       info->size >> 10, info->sector_count);
@@ -1264,6 +1478,8 @@ void flash_print_info(flash_info_t *info)
 		printf("  Buffer write timeout: %ld ms, ",
 		       info->buffer_write_tout);
 		printf("buffer size: %d bytes\n", info->buffer_size);
+	} else {
+		printf("  Buffer write: N/A\n");
 	}
 
 	puts("\n  Sector Start Addresses:");
@@ -1319,6 +1535,7 @@ void flash_print_info(flash_info_t *info)
 int write_buff(flash_info_t *info, uchar *src, ulong addr, ulong cnt)
 {
 	ulong wp;
+	ulong start = addr;
 	uchar *p;
 	int aln;
 	cfiword_t cword;
@@ -1359,8 +1576,15 @@ int write_buff(flash_info_t *info, uchar *src, ulong addr, ulong cnt)
 			flash_add_byte(info, &cword, flash_read8(p + i));
 
 		rc = flash_write_cfiword(info, wp, cword);
-		if (rc != 0)
+		if (rc != 0) {
+			if (!cfi_is_amd_standard(info))
+				return rc;
+			printf("cfi write fail rc=%d start=%08lx "
+			       "dst=%08lx sect=%lu remaining=%08lx\n",
+			       rc, start, wp,
+			       (ulong)find_sector(info, wp), cnt);
 			return rc;
+		}
 
 		wp += i;
 		FLASH_SHOW_PROGRESS(scale, dots, digit, i);
@@ -1377,8 +1601,15 @@ int write_buff(flash_info_t *info, uchar *src, ulong addr, ulong cnt)
 			for (i = 0; i < info->portwidth; i++)
 				flash_add_byte(info, &cword, *src++);
 			rc = flash_write_cfiword(info, wp, cword);
-			if (rc != 0)
+			if (rc != 0) {
+				if (!cfi_is_amd_standard(info))
+					return rc;
+				printf("cfi write fail rc=%d start=%08lx "
+				       "dst=%08lx sect=%lu remaining=%08lx\n",
+				       rc, start, wp,
+				       (ulong)find_sector(info, wp), cnt);
 				return rc;
+			}
 			wp += info->portwidth;
 			cnt -= info->portwidth;
 			continue;
@@ -1406,8 +1637,15 @@ int write_buff(flash_info_t *info, uchar *src, ulong addr, ulong cnt)
 		for (i = 0; i < info->portwidth; i++)
 			flash_add_byte(info, &cword, *src++);
 		rc = flash_write_cfiword(info, wp, cword);
-		if (rc != 0)
+		if (rc != 0) {
+			if (!cfi_is_amd_standard(info))
+				return rc;
+			printf("cfi write fail rc=%d start=%08lx "
+			       "dst=%08lx sect=%lu remaining=%08lx\n",
+			       rc, start, wp,
+			       (ulong)find_sector(info, wp), cnt);
 			return rc;
+		}
 		wp += info->portwidth;
 		cnt -= info->portwidth;
 		FLASH_SHOW_PROGRESS(scale, dots, digit, info->portwidth);
@@ -1432,7 +1670,13 @@ int write_buff(flash_info_t *info, uchar *src, ulong addr, ulong cnt)
 	for (; i < info->portwidth; ++i)
 		flash_add_byte(info, &cword, flash_read8(p + i));
 
-	return flash_write_cfiword(info, wp, cword);
+	rc = flash_write_cfiword(info, wp, cword);
+	if (rc != 0 && cfi_is_amd_standard(info))
+		printf("cfi write fail rc=%d start=%08lx dst=%08lx "
+		       "sect=%lu remaining=tail\n",
+		       rc, start, wp, (ulong)find_sector(info, wp));
+
+	return rc;
 }
 
 static inline int manufact_match(flash_info_t *info, u32 manu)
@@ -1553,7 +1797,8 @@ int flash_real_protect(flash_info_t *info, long sector, int prot)
 
 			if (flash_status_check(info, sector,
 					       info->erase_blk_tout,
-					       prot ? "protect" : "unprotect"))
+					       prot ? "protect" : "unprotect",
+					       NULL))
 				printf("status check error\n");
 
 			flash_write_cmd(info, 0, 0,
@@ -1942,15 +2187,15 @@ static int __flash_detect_cfi(flash_info_t *info, struct cfi_qry *qry)
 			info->addr_unlock2 = 0x2aa;
 
 			/*
-			 * modify the unlock address if we are
-			 * in compatibility mode
+			 * Modify the unlock address if we are in compatibility
+			 * mode (x8/x16 chip probed in x8 mode, or x16/x32 chip
+			 * probed in x16 mode).  In those modes the address lines
+			 * are shifted by one so unlock addresses double.
 			 */
-			if (/* x8/x16 in x8 mode */
-			    (info->chipwidth == FLASH_CFI_BY8 &&
-				info->interface == FLASH_CFI_X8X16) ||
-			    /* x16/x32 in x16 mode */
+			if ((info->chipwidth == FLASH_CFI_BY8 &&
+			     info->interface == FLASH_CFI_X8X16) ||
 			    (info->chipwidth == FLASH_CFI_BY16 &&
-				info->interface == FLASH_CFI_X16X32)) {
+			     info->interface == FLASH_CFI_X16X32)) {
 				info->addr_unlock1 = 0xaaa;
 				info->addr_unlock2 = 0x555;
 			}
@@ -1965,20 +2210,32 @@ static int __flash_detect_cfi(flash_info_t *info, struct cfi_qry *qry)
 
 static int flash_detect_cfi(flash_info_t *info, struct cfi_qry *qry)
 {
+	int probe_chipwidth;
+
 	debug("flash detect cfi\n");
 
 	for (info->portwidth = CONFIG_SYS_FLASH_CFI_WIDTH;
 	     info->portwidth <= FLASH_CFI_64BIT; info->portwidth <<= 1) {
-		for (info->chipwidth = FLASH_CFI_BY8;
-		     info->chipwidth <= info->portwidth;
-		     info->chipwidth <<= 1) {
+		for (probe_chipwidth = FLASH_CFI_BY8;
+		     probe_chipwidth <= info->portwidth;
+		     probe_chipwidth <<= 1) {
+			/*
+			 * chipwidth is used by flash_make_cmd/flash_isequal
+			 * to decide how to construct and compare bus-wide
+			 * values.  It is a probe parameter here, not yet a
+			 * property of the chip — the real chip width will be
+			 * derived from interface_desc after a successful
+			 * detect.
+			 */
+			info->chipwidth = probe_chipwidth;
+
 			/*
 			 * First, try detection without shifting the addresses
 			 * for 8bit devices (16bit wide connection)
 			 */
 			info->chip_lsb = 0;
 			if (__flash_detect_cfi(info, qry))
-				return 1;
+				goto found;
 
 			/*
 			 * Not detected, so let's try with shifting
@@ -1986,11 +2243,43 @@ static int flash_detect_cfi(flash_info_t *info, struct cfi_qry *qry)
 			 */
 			info->chip_lsb = 1;
 			if (__flash_detect_cfi(info, qry))
-				return 1;
+				goto found;
 		}
 	}
 	debug("not found\n");
 	return 0;
+
+found:
+	/*
+	 * probe_chipwidth / info->chipwidth got the probe to work — it
+	 * reflects the bus-encoding width needed by flash_make_cmd and
+	 * must stay as-is for all command writes.
+	 *
+	 * Separately, derive the chip's physical native width from
+	 * interface_desc (CFI offset 0x28) and store it in native_width.
+	 * native_width is used only for display (flinfo) and size
+	 * calculations — never for command encoding.
+	 */
+	switch (info->interface) {
+	case FLASH_CFI_X8:
+		info->native_width = FLASH_CFI_BY8;
+		break;
+	case FLASH_CFI_X16:
+		info->native_width = FLASH_CFI_BY16;
+		break;
+	case FLASH_CFI_X8X16:
+		/* chip is 8-bit silicon, operating in x16 mode on this bus */
+		info->native_width = FLASH_CFI_BY8;
+		break;
+	case FLASH_CFI_X16X32:
+		info->native_width = FLASH_CFI_BY16;
+		break;
+	default:
+		/* unknown: fall back to probe width */
+		info->native_width = info->chipwidth;
+		break;
+	}
+	return 1;
 }
 
 /*
@@ -2010,6 +2299,34 @@ static void flash_fixup_amd(flash_info_t *info, struct cfi_qry *qry)
 			/* CFI >= 1.1, deduct from top/bottom flag */
 			/* note: ext_addr is valid since cfi_version > 0 */
 			cfi_reverse_geometry(qry);
+		}
+	}
+
+	/*
+	 * The standard Intel CFI query field max_buf_write_size (offset 0x2A)
+	 * is not populated on AMD command-set flashes.  The correct value is
+	 * in the AMD vendor-specific PRI table (starts at offset 0x30 from
+	 * the QRY marker, PRI version >= 1.1).  Byte 0x09 of the PRI table
+	 * = N; buffer size = (1 << N) * (portwidth / native_width) bytes.
+	 * Set info->buffer_size directly; the common code will skip the
+	 * Intel-based computation if this is non-zero.
+	 *
+	 * Do not enable AMD buffered writes when an x8/x16 chip is wired on a
+	 * wider bus.  The command/address encoding still needs the bus width,
+	 * but the buffer-write algorithm is not reliable on this layout.
+	 */
+	{
+		u8 pri0 = flash_read_uchar(info, FLASH_OFFSET_CFI_RESP + 0x30);
+
+		if (pri0 == 'P') {
+			u8 mbs = flash_read_uchar(info,
+				FLASH_OFFSET_CFI_RESP + 0x30 + 0x09);
+
+			if (mbs && info->native_width >= info->portwidth) {
+				unsigned int div = info->portwidth / info->native_width;
+
+				info->buffer_size = (1 << mbs) * div;
+			}
 		}
 	}
 }
@@ -2162,6 +2479,7 @@ ulong flash_get_size(phys_addr_t base, int banknum)
 		switch (info->manufacturer_id) {
 		case 0x0001: /* AMD */
 		case 0x0037: /* AMIC */
+		case 0x00c2: /* Macronix */
 			flash_fixup_amd(info, &qry);
 			break;
 		case 0x001f:
@@ -2184,10 +2502,35 @@ ulong flash_get_size(phys_addr_t base, int banknum)
 		debug("device id2 is 0x%x\n", info->device_id2);
 		debug("cfi version is 0x%04x\n", info->cfi_version);
 
-		size_ratio = info->portwidth / info->chipwidth;
+		{
+			static const char * const mfr_name[] = {
+				[0x0001] = "AMD/Spansion/Macronix",
+				[0x0020] = "STMicroelectronics",
+				[0x0089] = "Numonyx/Intel",
+				[0x00BF] = "SST",
+				[0x001F] = "Atmel",
+				[0x0037] = "AMIC",
+				[0x00C2] = "Macronix",
+			};
+			const char *name = NULL;
+			if (info->manufacturer_id < ARRAY_SIZE(mfr_name))
+				name = mfr_name[info->manufacturer_id];
+			if (!name) name = "Unknown";
+
+			printf("Flash: %s (ID 0x%04x), device 0x%04x",
+			       name, info->manufacturer_id, info->device_id);
+			if (info->device_id == 0x7E || (info->device_id & 0xff) == 0x7E)
+				printf(" (ext 0x%04x)", info->device_id2);
+			printf(", %ld MiB, CFI v%d.%d\n",
+			       info->size >> 20,
+			       (info->cfi_version >> 4) & 0xf,
+			       info->cfi_version & 0xf);
+		}
+
+		size_ratio = info->portwidth / info->native_width;
 		/* if the chip is x8/x16 reduce the ratio by half */
 		if (info->interface == FLASH_CFI_X8X16 &&
-		    info->chipwidth == FLASH_CFI_BY8) {
+		    info->native_width == FLASH_CFI_BY8) {
 			size_ratio >>= 1;
 		}
 		debug("size_ratio %d port %d bits chip %d bits\n",
@@ -2293,8 +2636,25 @@ ulong flash_get_size(phys_addr_t base, int banknum)
 		}
 
 		info->sector_count = sect_cnt;
-		info->buffer_size = 1 << le16_to_cpu(qry.max_buf_write_size);
+
+		printf("  Sectors: %ld total, erase regions:", sect_cnt);
+		for (i = 0; i < num_erase_regions; i++) {
+			if (i > NUM_ERASE_REGIONS) break;
+			tmp = le32_to_cpu(get_unaligned(&qry.erase_region_info[i]));
+			printf(" %ldx%ldKB",
+			       (tmp & 0xffff) + 1,
+			       ((tmp >> 16) & 0xffff) * 256 / 1024);
+		}
+		printf("\n");
+
+		if (cfi_is_amd_standard(info) &&
+		    info->native_width < info->portwidth)
+			info->buffer_size = 1;
+		else if (!info->buffer_size)
+			info->buffer_size = 1 << le16_to_cpu(qry.max_buf_write_size);
+
 		tmp = 1 << qry.block_erase_timeout_typ;
+		info->erase_blk_typ = tmp;
 		info->erase_blk_tout = tmp *
 			(1 << qry.block_erase_timeout_max);
 		tmp = (1 << qry.buf_write_timeout_typ) *
