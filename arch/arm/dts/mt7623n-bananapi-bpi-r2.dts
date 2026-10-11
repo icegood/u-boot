@@ -6,6 +6,7 @@
  */
 
 /dts-v1/;
+#include <dt-bindings/input/linux-event-codes.h>
 #include "mt7623.dtsi"
 #include "mt7623-u-boot.dtsi"
 
@@ -64,6 +65,16 @@
 			label = "bpi-r2:pio:red";
 			gpios = <&gpio 239 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		factory {
+			label = "factory";
+			gpios = <&gpio 256 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
 		};
 	};
 };
